@@ -8,6 +8,7 @@ using OpenAI.Responses;
 using Microsoft.Identity.Client;
 using Microsoft.Identity.Web;
 using System.Runtime.CompilerServices;
+using System.Text;
 using WebApp.Api.Models;
 
 namespace WebApp.Api.Services;
@@ -36,6 +37,7 @@ public class AgentFrameworkService : IDisposable
     /// </summary>
     private readonly string? _configuredAgentVersion;
     private readonly ILogger<AgentFrameworkService> _logger;
+    private readonly ConversationStore _conversationStore;
     private readonly IHttpContextAccessor? _httpContextAccessor;
     private readonly string? _backendClientId;
     private readonly string? _tenantId;
@@ -72,6 +74,7 @@ public class AgentFrameworkService : IDisposable
         _logger = logger;
         _httpClientFactory = httpClientFactory;
         _httpContextAccessor = httpContextAccessor;
+        _conversationStore = new ConversationStore();
 
         _agentEndpoint = configuration["AI_AGENT_ENDPOINT"]
             ?? throw new InvalidOperationException("AI_AGENT_ENDPOINT is not configured");
@@ -362,8 +365,19 @@ public class AgentFrameworkService : IDisposable
             options.InputItems.Add(userMessage);
         }
 
+        _conversationStore.EnsureConversation(conversationId, message);
+        if (!string.IsNullOrEmpty(previousResponseId) && mcpApproval != null)
+        {
+            _logger.LogInformation("Skipping user message persistence for MCP approval resume conversation {ConversationId}", conversationId);
+        }
+        else if (!string.IsNullOrWhiteSpace(message))
+        {
+            _conversationStore.AddMessage(conversationId, "user", message);
+        }
+
         // Dictionary to collect file search results for quote extraction
         var fileSearchQuotes = new Dictionary<string, string>();
+        var assistantText = new StringBuilder();
         // Track the current response ID for MCP approval resume flow
         string? currentResponseId = null;
 
@@ -382,6 +396,7 @@ public class AgentFrameworkService : IDisposable
 
             if (update is StreamingResponseOutputTextDeltaUpdate deltaUpdate)
             {
+                assistantText.Append(deltaUpdate.Delta);
                 yield return StreamChunk.Text(deltaUpdate.Delta);
             }
             else if (update is StreamingResponseOutputItemDoneUpdate itemDoneUpdate)
@@ -464,6 +479,11 @@ public class AgentFrameworkService : IDisposable
             {
                 _logger.LogDebug("Unhandled stream update type: {Type}", update.GetType().Name);
             }
+        }
+
+        if (assistantText.Length > 0)
+        {
+            _conversationStore.AddMessage(conversationId, "assistant", assistantText.ToString());
         }
 
         _logger.LogInformation("Completed streaming for conversation: {ConversationId}", conversationId);
@@ -823,15 +843,25 @@ public class AgentFrameworkService : IDisposable
                 conversationOptions.Metadata["title"] = title;
             }
 
-            ProjectConversation conversation
-                = await GetProjectClient().ProjectOpenAIClient.GetProjectConversationsClient().CreateProjectConversationAsync(
-                    conversationOptions,
-                    cancellationToken);
+            try
+            {
+                ProjectConversation conversation
+                    = await GetProjectClient().ProjectOpenAIClient.GetProjectConversationsClient().CreateProjectConversationAsync(
+                        conversationOptions,
+                        cancellationToken);
 
-            _logger.LogInformation(
-                "Created conversation: {ConversationId}", 
-                conversation.Id);
-            return conversation.Id;
+                _conversationStore.EnsureConversation(conversation.Id, firstMessage);
+
+                _logger.LogInformation(
+                    "Created conversation: {ConversationId}",
+                    conversation.Id);
+                return conversation.Id;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Foundry conversation creation failed; using in-process fallback conversation store");
+                return _conversationStore.CreateConversation(firstMessage);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -856,29 +886,42 @@ public class AgentFrameworkService : IDisposable
         {
             _logger.LogInformation("Listing conversations (limit={Limit})", limit);
 
-            // Pin to the same resolved version metadata/streaming use.
-            var resolvedAgent = await GetAgentAsync(cancellationToken);
-            var resolvedVersion = _configuredAgentVersion ?? resolvedAgent.Version;
-
-            var conversations = new List<ConversationSummary>();
-            // Fetch limit+1 to detect if more conversations exist beyond the requested page
-            var fetchLimit = limit + 1;
-            await foreach (var conv in GetProjectClient().ProjectOpenAIClient.GetProjectConversationsClient().GetProjectConversationsAsync(
-                new AgentReference(_agentId, resolvedVersion), cancellationToken: cancellationToken))
+            try
             {
-                conversations.Add(new ConversationSummary
-                {
-                    Id = conv.Id,
-                    Title = conv.Metadata?.TryGetValue("title", out var title) == true ? title : null,
-                    CreatedAt = conv.CreatedAt.ToUnixTimeSeconds()
-                });
+                // Pin to the same resolved version metadata/streaming use.
+                var resolvedAgent = await GetAgentAsync(cancellationToken);
+                var resolvedVersion = _configuredAgentVersion ?? resolvedAgent.Version;
 
-                if (conversations.Count >= fetchLimit)
-                    break;
+                var conversations = new List<ConversationSummary>();
+                // Fetch limit+1 to detect if more conversations exist beyond the requested page
+                var fetchLimit = limit + 1;
+                await foreach (var conv in GetProjectClient().ProjectOpenAIClient.GetProjectConversationsClient().GetProjectConversationsAsync(
+                    new AgentReference(_agentId, resolvedVersion), cancellationToken: cancellationToken))
+                {
+                    conversations.Add(new ConversationSummary
+                    {
+                        Id = conv.Id,
+                        Title = conv.Metadata?.TryGetValue("title", out var title) == true ? title : null,
+                        CreatedAt = conv.CreatedAt.ToUnixTimeSeconds()
+                    });
+
+                    if (conversations.Count >= fetchLimit)
+                        break;
+                }
+
+                if (conversations.Count > 0)
+                {
+                    _logger.LogInformation("Found {Count} conversations", conversations.Count);
+                    return conversations;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Foundry conversation listing failed; using in-process fallback conversation store");
             }
 
-            _logger.LogInformation("Found {Count} conversations", conversations.Count);
-            return conversations;
+            var fallbackConversations = _conversationStore.ListConversations();
+            return fallbackConversations.Take(limit).ToList();
         }
         catch (Exception ex)
         {
@@ -900,30 +943,43 @@ public class AgentFrameworkService : IDisposable
         {
             _logger.LogInformation("Getting messages for conversation: {ConversationId}", conversationId);
 
-            var messages = new List<ConversationMessageInfo>();
-
-            // Filter to message items only
-            await foreach (var item in GetProjectClient().ProjectOpenAIClient.GetProjectConversationsClient().GetProjectConversationItemsAsync(
-                conversationId, itemKind: AgentResponseItemKind.Message, cancellationToken: cancellationToken))
+            try
             {
-                var responseItem = item.AsResponseResultItem();
-                if (responseItem is MessageResponseItem messageItem)
-                {
-                    var content = string.Join("", messageItem.Content
-                        .Where(c => c.Text != null)
-                        .Select(c => c.Text));
+                var messages = new List<ConversationMessageInfo>();
 
-                    messages.Add(new ConversationMessageInfo
+                // Filter to message items only
+                await foreach (var item in GetProjectClient().ProjectOpenAIClient.GetProjectConversationsClient().GetProjectConversationItemsAsync(
+                    conversationId, itemKind: AgentResponseItemKind.Message, cancellationToken: cancellationToken))
+                {
+                    var responseItem = item.AsResponseResultItem();
+                    if (responseItem is MessageResponseItem messageItem)
                     {
-                        Role = messageItem.Role.ToString().ToLowerInvariant(),
-                        Content = content
-                    });
+                        var content = string.Join("", messageItem.Content
+                            .Where(c => c.Text != null)
+                            .Select(c => c.Text));
+
+                        messages.Add(new ConversationMessageInfo
+                        {
+                            Role = messageItem.Role.ToString().ToLowerInvariant(),
+                            Content = content
+                        });
+                    }
+                }
+
+                if (messages.Count > 0)
+                {
+                    _logger.LogInformation("Found {Count} messages in conversation {ConversationId}", messages.Count, conversationId);
+                    messages.Reverse();
+                    return messages;
                 }
             }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Foundry conversation message listing failed; using in-process fallback conversation store for {ConversationId}", conversationId);
+            }
 
-            _logger.LogInformation("Found {Count} messages in conversation {ConversationId}", messages.Count, conversationId);
-            messages.Reverse();
-            return messages;
+            var fallbackMessages = _conversationStore.GetMessages(conversationId);
+            return fallbackMessages;
         }
         catch (Exception ex)
         {

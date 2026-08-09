@@ -3,7 +3,7 @@ import { Spinner } from '@fluentui/react-components';
 import { useAppState } from './hooks/useAppState';
 import { InteractionType } from "@azure/msal-browser";
 import { ErrorBoundary } from "./components/core/ErrorBoundary";
-import { AgentChat } from "./components/AgentChat";
+import { DailyShell } from "./components/daily/DailyShell";
 import { loginRequest } from "./config/authConfig";
 import { useState, useEffect, useCallback } from "react";
 import { useAuth } from "./hooks/useAuth";
@@ -84,14 +84,8 @@ function App() {
         <>
           <AuthenticatedTemplate>
             {agentMetadata && (
-              <div className="app-container">
-                <AgentChat 
-                  agentId={agentMetadata.id}
-                  agentName={agentMetadata.name}
-                  agentDescription={agentMetadata.description || undefined}
-                  agentLogo={agentMetadata.metadata?.logo}
-                  starterPrompts={agentMetadata.starterPrompts || undefined}
-                />
+              <div className="app-container">  
+                <DailyShell agentMetadata={agentMetadata} />
               </div>
             )}
           </AuthenticatedTemplate>
