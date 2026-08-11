@@ -1,37 +1,44 @@
-import React from "react";
-import ReactDOM from "react-dom/client";
-import { PublicClientApplication, EventType, type AuthenticationResult } from "@azure/msal-browser";
-import { MsalProvider } from "@azure/msal-react";
-import App from "./App";
-import { msalConfig } from "./config/authConfig";
-import "./index.css";
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import {
+  PublicClientApplication,
+  EventType,
+  type AuthenticationResult,
+} from '@azure/msal-browser';
+import { MsalProvider } from '@azure/msal-react';
+import { BrowserRouter } from 'react-router-dom';
+
+import App from './App';
+import { msalConfig } from './config/authConfig';
 import { AppProvider } from './contexts/AppContext';
 import { ThemeProvider } from './components/ThemeProvider';
 import { initTelemetry } from './services/telemetry';
 
+import './index.css';
+
 initTelemetry();
 
-// Initialize MSAL instance
 const msalInstance = new PublicClientApplication(msalConfig);
 
-// Handle redirect promise (required for PKCE flow)
 msalInstance.initialize().then(() => {
-  // Account selection logic (optional, handles multiple accounts)
   const accounts = msalInstance.getAllAccounts();
+
   if (accounts.length > 0) {
     msalInstance.setActiveAccount(accounts[0]);
   }
 
   msalInstance.addEventCallback((event) => {
-    if (event.eventType === EventType.LOGIN_SUCCESS && event.payload) {
+    if (
+      event.eventType === EventType.LOGIN_SUCCESS &&
+      event.payload
+    ) {
       const payload = event.payload as AuthenticationResult;
-      const account = payload.account;
-      msalInstance.setActiveAccount(account);
+      msalInstance.setActiveAccount(payload.account);
     }
   });
 
-  const rootElement = document.getElementById("root");
-  
+  const rootElement = document.getElementById('root');
+
   if (!rootElement) {
     console.error('Failed to find the root element');
     return;
@@ -40,11 +47,13 @@ msalInstance.initialize().then(() => {
   ReactDOM.createRoot(rootElement).render(
     <React.StrictMode>
       <MsalProvider instance={msalInstance}>
-        <AppProvider>
-          <ThemeProvider>
-            <App />
-          </ThemeProvider>
-        </AppProvider>
+        <BrowserRouter>
+          <AppProvider>
+            <ThemeProvider>
+              <App />
+            </ThemeProvider>
+          </AppProvider>
+        </BrowserRouter>
       </MsalProvider>
     </React.StrictMode>
   );
