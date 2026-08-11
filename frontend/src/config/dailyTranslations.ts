@@ -20,9 +20,9 @@ export const dailyTranslations = {
       ctaSecondary: 'Ver cómo funciona',
     },
     whatIs: {
-      title: '¿Qué es Daily?',
+      title: '¿Quién es Daily?',
       subtitle:
-        'Un agente de consulta inteligente que accede al conocimiento reutilizable de CONSEIN. Relaciona preguntas actuales con experiencias, proyectos, soluciones y lecciones aprendidas previamente documentadas.',
+        'Daily es un agente de consulta inteligente que accede al conocimiento reutilizable de CONSEIN. Relaciona preguntas actuales con experiencias, proyectos, soluciones y lecciones aprendidas previamente documentadas.',
       cards: [
         {
           title: 'Consulta conocimiento',
@@ -60,10 +60,9 @@ export const dailyTranslations = {
           desc: 'El agente recupera conocimiento relevante para nuevas preguntas.',
         },
       ],
-      tag: 'Kiara preserva la experiencia. Daily la convierte en respuestas útiles.',
     },
     howWorks: {
-      title: 'Cómo funciona',
+      title: '¿Cómo funciona?',
       steps: [
         {
           n: '01',
