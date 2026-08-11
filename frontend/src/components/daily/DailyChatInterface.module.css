@@ -4,32 +4,31 @@
   display: flex;
   overflow: hidden;
   background:
-    radial-gradient(ellipse 80% 60% at 50% -10%, rgba(0, 91, 150, 0.28) 0%, transparent 65%),
-    radial-gradient(ellipse 50% 40% at 90% 90%, rgba(18, 50, 99, 0.18) 0%, transparent 55%),
+    radial-gradient(
+      ellipse 80% 60% at 50% -10%,
+      rgba(0, 91, 150, 0.28) 0%,
+      transparent 65%
+    ),
+    radial-gradient(
+      ellipse 50% 40% at 90% 90%,
+      rgba(18, 50, 99, 0.18) 0%,
+      transparent 55%
+    ),
     #06111f;
   color: #e8f0f8;
   font-family: Inter, system-ui, sans-serif;
 }
 
-.sidebar {
-  width: 290px;
-  flex: 0 0 290px;
+.main {
+  width: 100%;
+  min-width: 0;
+  flex: 1;
   display: flex;
   flex-direction: column;
-  padding: 18px;
-  border-right: 1px solid rgba(124, 188, 227, 0.12);
-  background: rgba(6, 17, 31, 0.72);
-  backdrop-filter: blur(18px);
+  position: relative;
+  overflow: hidden;
 }
 
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 18px;
-}
-
-.logoBox,
 .avatar,
 .welcomeLogo {
   display: flex;
@@ -37,102 +36,6 @@
   justify-content: center;
   background: linear-gradient(135deg, #005b96, #123263);
   box-shadow: 0 8px 32px rgba(0, 91, 150, 0.35);
-}
-
-.logoBox {
-  width: 42px;
-  height: 42px;
-  border-radius: 14px;
-}
-
-.brandTitle {
-  font-family: Outfit, system-ui, sans-serif;
-  font-size: 17px;
-  font-weight: 700;
-}
-
-.brandSubtitle {
-  color: #627084;
-  font-size: 11px;
-  margin-top: 2px;
-}
-
-.newChatButton,
-.sidebarAction {
-  width: 100%;
-  border: 1px solid rgba(124, 188, 227, 0.16);
-  background: rgba(16, 42, 71, 0.72);
-  color: #e8f0f8;
-  border-radius: 13px;
-  padding: 11px 13px;
-  cursor: pointer;
-  transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
-}
-
-.newChatButton:hover,
-.sidebarAction:hover {
-  transform: translateY(-1px);
-  border-color: rgba(124, 188, 227, 0.38);
-  background: rgba(16, 42, 71, 0.95);
-}
-
-.sidebarSectionTitle {
-  margin: 22px 0 10px;
-  color: #627084;
-  font-family: "JetBrains Mono", monospace;
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.conversationList {
-  flex: 1;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.emptyConversations {
-  color: #627084;
-  font-size: 13px;
-  padding: 12px;
-  border: 1px dashed rgba(124, 188, 227, 0.14);
-  border-radius: 12px;
-}
-
-.conversationItem {
-  width: 100%;
-  text-align: left;
-  border: 1px solid transparent;
-  background: transparent;
-  color: #a8b4c2;
-  border-radius: 12px;
-  padding: 10px 12px;
-  cursor: pointer;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.conversationItem:hover,
-.conversationItemActive {
-  color: #e8f0f8;
-  background: rgba(124, 188, 227, 0.07);
-  border-color: rgba(124, 188, 227, 0.16);
-}
-
-.sidebarFooter {
-  padding-top: 14px;
-  border-top: 1px solid rgba(124, 188, 227, 0.1);
-}
-
-.main {
-  min-width: 0;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  position: relative;
 }
 
 .topbar {
@@ -252,7 +155,7 @@
 
 .thread {
   width: 100%;
-  max-width: 900px;
+  max-width: 1100px;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
@@ -368,7 +271,7 @@
 .pendingBox,
 .errorBar,
 .editBar {
-  max-width: 900px;
+  max-width: 1100px;
   margin: 0 auto 10px;
   border-radius: 13px;
   padding: 10px 14px;
@@ -418,7 +321,7 @@
 
 .fileList {
   width: 100%;
-  max-width: 900px;
+  max-width: 1100px;
   margin: 0 auto 10px;
   display: flex;
   flex-wrap: wrap;
@@ -437,7 +340,7 @@
 
 .inputBox {
   width: 100%;
-  max-width: 900px;
+  max-width: 1100px;
   margin: 0 auto;
   display: flex;
   align-items: flex-end;

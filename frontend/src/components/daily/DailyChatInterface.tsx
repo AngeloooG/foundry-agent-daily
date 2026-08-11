@@ -16,26 +16,20 @@ interface DailyChatInterfaceProps {
   recoveredInput?: string;
   recoveredAttachments?: IFileAttachment[];
   pendingMessages?: Array<{ text: string; files?: File[] }>;
-  currentConversationId?: string | null;
-  conversations?: Array<{ id: string; title?: string | null; createdAt?: string | number | null }>;
-  sidebarOpen?: boolean;
   agentName?: string;
   agentDescription?: string;
-  agentLogo?: string;
   starterPrompts?: string[];
   isEditing?: boolean;
   onSendMessage: (text: string, files?: File[]) => void;
   onClearError?: () => void;
-  onNewChat?: () => void;
   onCancelStream?: () => void;
   onRecoveredInputConsumed?: () => void;
   onRegenerate?: () => void;
   onEditMessage?: (messageId: string, newText: string) => void;
   onCancelEdit?: () => void;
   onFeedback?: (messageId: string, rating: 'positive' | 'negative') => void;
-  onDownloadFile?: (fileId: string, fileName: string, containerId?: string) => void;
-  onExportConversation?: () => void;
-  onLoadConversation?: (conversationId: string) => void;
+  initialDraft?: string;
+  onInitialDraftConsumed?: () => void;
 }
 
 const DEFAULT_PROMPTS = [
@@ -54,33 +48,42 @@ export function DailyChatInterface({
   streamingMessageId,
   recoveredInput,
   pendingMessages = [],
-  conversations = [],
-  currentConversationId,
   agentName = 'Daily',
   agentDescription = 'Agente de conocimiento empresarial',
   starterPrompts,
   isEditing,
+  initialDraft,
   onSendMessage,
   onClearError,
-  onNewChat,
   onCancelStream,
   onRecoveredInputConsumed,
   onRegenerate,
   onEditMessage,
   onCancelEdit,
   onFeedback,
-  onExportConversation,
-  onLoadConversation,
+  onInitialDraftConsumed,
 }: DailyChatInterfaceProps) {
   const [input, setInput] = useState(recoveredInput || '');
   const [files, setFiles] = useState<File[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const isStreaming = status === 'streaming';
   const isSending = status === 'sending';
   const isBusy = isStreaming || isSending;
   const prompts = starterPrompts?.length ? starterPrompts : DEFAULT_PROMPTS;
+
+  const selectPrompt = (prompt: string) => {
+    setInput(prompt);
+
+    window.requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+
+      const cursorPosition = prompt.length;
+      textareaRef.current?.setSelectionRange(cursorPosition, cursorPosition);
+    });
+  };
 
   useEffect(() => {
     if (recoveredInput) {
@@ -90,13 +93,28 @@ export function DailyChatInterface({
   }, [recoveredInput, onRecoveredInputConsumed]);
 
   useEffect(() => {
+    const draft = initialDraft?.trim();
+    if (!draft) {
+      return;
+    }
+    setInput(draft);
+    onInitialDraftConsumed?.();
+
+    window.requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      const cursorPosition = draft.length;
+      textareaRef.current?.setSelectionRange(cursorPosition, cursorPosition);
+    });
+  }, [initialDraft, onInitialDraftConsumed]);
+
+  useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages, status]);
 
   const submit = (text?: string) => {
     const value = (text ?? input).trim();
 
-    if (!value || isSending) return;
+    if (!value || isBusy) return;
 
     onSendMessage(value, files.length > 0 ? files : undefined);
     setInput('');
@@ -121,52 +139,6 @@ export function DailyChatInterface({
 
   return (
     <div className={styles.shell}>
-      <aside className={styles.sidebar}>
-        <div className={styles.brand}>
-          <div className={styles.logoBox}>
-            <DailyLogo size={20} />
-          </div>
-
-          <div>
-            <div className={styles.brandTitle}>{agentName}</div>
-            <div className={styles.brandSubtitle}>CONSEIN · Agente</div>
-          </div>
-        </div>
-
-        <button type="button" className={styles.newChatButton} onClick={onNewChat}>
-          Nuevo chat
-        </button>
-
-        <div className={styles.sidebarSectionTitle}>Conversaciones</div>
-
-        <div className={styles.conversationList}>
-          {conversations.length === 0 ? (
-            <div className={styles.emptyConversations}>Sin conversaciones cargadas</div>
-          ) : (
-            conversations.map((conversation) => {
-              const isActive = conversation.id === currentConversationId;
-
-              return (
-                <button
-                  key={conversation.id}
-                  type="button"
-                  className={`${styles.conversationItem} ${isActive ? styles.conversationItemActive : ''}`}
-                  onClick={() => onLoadConversation?.(conversation.id)}
-                >
-                  <span>{conversation.title || 'Conversación'}</span>
-                </button>
-              );
-            })
-          )}
-        </div>
-
-        <div className={styles.sidebarFooter}>
-          <button type="button" className={styles.sidebarAction} onClick={onExportConversation}>
-            Exportar Markdown
-          </button>
-        </div>
-      </aside>
-
       <main className={styles.main}>
         <header className={styles.topbar}>
           <div>
@@ -201,7 +173,7 @@ export function DailyChatInterface({
                     key={`${prompt}-${index}`}
                     type="button"
                     className={styles.promptChip}
-                    onClick={() => submit(prompt)}
+                    onClick={() => selectPrompt(prompt)}
                     disabled={isBusy}
                   >
                     {prompt}
@@ -331,6 +303,7 @@ export function DailyChatInterface({
             </button>
 
             <textarea
+              ref={textareaRef}
               value={input}
               onChange={(event) => setInput(event.target.value)}
               onKeyDown={handleKeyDown}

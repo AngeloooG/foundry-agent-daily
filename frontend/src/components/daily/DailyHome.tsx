@@ -7,9 +7,10 @@ interface DailyHomeProps {
     t: any;
     dark: boolean;
     setPage: (page: DailyPage) => void;
+    onQuestionSelect: (question: string) => void;
 }
 
-export function DailyHome({ t, dark, setPage }: DailyHomeProps) {
+export function DailyHome({ t, dark, setPage, onQuestionSelect }: DailyHomeProps) {
     return (
         <main className={styles.page}>
             <section className={styles.hero}>
@@ -181,7 +182,11 @@ export function DailyHome({ t, dark, setPage }: DailyHomeProps) {
 
                 <div className={styles.questionCloud}>
                     {t.sampleQuestions.questions.map((question: string) => (
-                        <button key={question} type="button" onClick={() => setPage('consult')}>
+                        <button
+                            key={question}
+                            type="button"
+                            onClick={() => onQuestionSelect(question)}
+                        >
                             {question}
                         </button>
                     ))}

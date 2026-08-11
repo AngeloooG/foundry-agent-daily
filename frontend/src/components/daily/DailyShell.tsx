@@ -20,8 +20,19 @@ export function DailyShell({ agentMetadata }: DailyShellProps) {
   const [page, setPage] = useState<DailyPage>('home');
   const [lang, setLang] = useState<DailyLang>('es');
   const [dark, setDark] = useState(true);
-
+  const [draftQuestion, setDraftQuestion] = useState('');
   const t = dailyTranslations[lang];
+  const openChatWithQuestion = (question: string) => {
+    const normalizedQuestion = question.trim();
+
+    if (!normalizedQuestion) {
+      return;
+    }
+
+    setDraftQuestion(normalizedQuestion);
+    setPage('consult');
+    window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+  };
 
   useEffect(() => {
     document.documentElement.classList.toggle('daily-light', !dark);
@@ -39,7 +50,7 @@ export function DailyShell({ agentMetadata }: DailyShellProps) {
         t={t}
       />
 
-      {page === 'home' && <DailyHome t={t} dark={dark} setPage={setPage} />}
+      {page === 'home' && <DailyHome t={t} dark={dark} setPage={setPage} onQuestionSelect={openChatWithQuestion} />}
 
       {page === 'consult' && (
         <div className={styles.chatPage}>
@@ -47,10 +58,13 @@ export function DailyShell({ agentMetadata }: DailyShellProps) {
             agentId={agentMetadata.id}
             agentName={agentMetadata.name || 'Daily'}
             agentDescription={
-              agentMetadata.description || 'Agente de conocimiento empresarial de CONSEIN'
+              agentMetadata.description ||
+              'Agente de conocimiento empresarial de CONSEIN'
             }
             agentLogo={agentMetadata.metadata?.logo}
             starterPrompts={agentMetadata.starterPrompts || undefined}
+            initialDraft={draftQuestion}
+            onInitialDraftConsumed={() => setDraftQuestion('')}
           />
         </div>
       )}
