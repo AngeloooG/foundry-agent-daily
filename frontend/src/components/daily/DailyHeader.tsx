@@ -1,11 +1,17 @@
 import { useState } from 'react';
-import type { DailyLang, DailyPage } from '../../config/dailyTranslations';
+import {
+  Link,
+  NavLink,
+} from 'react-router-dom';
+
+import type {
+  DailyLang,
+} from '../../config/dailyTranslations';
+
 import { DailyLogo } from './DailyLogo';
 import styles from './DailyShell.module.css';
 
 interface DailyHeaderProps {
-  page: DailyPage;
-  setPage: (page: DailyPage) => void;
   lang: DailyLang;
   setLang: (lang: DailyLang) => void;
   dark: boolean;
@@ -13,9 +19,12 @@ interface DailyHeaderProps {
   t: any;
 }
 
+interface NavigationItem {
+  path: string;
+  label: string;
+}
+
 export function DailyHeader({
-  page,
-  setPage,
   lang,
   setLang,
   dark,
@@ -24,22 +33,42 @@ export function DailyHeader({
 }: DailyHeaderProps) {
   const [menuOpen, setMenuOpen] = useState(false);
 
-  const navItems: Array<{ key: DailyPage; label: string }> = [
-    { key: 'home', label: t.nav.home },
-    { key: 'consult', label: t.nav.consult },
-    { key: 'technology', label: t.nav.technology },
-    { key: 'faq', label: t.nav.faq },
+  const navItems: NavigationItem[] = [
+    {
+      path: '/home',
+      label: t.nav.home,
+    },
+    {
+      path: '/daily',
+      label: t.nav.consult,
+    },
+    {
+      path: '/technology',
+      label: t.nav.technology,
+    },
+    {
+      path: '/faq',
+      label: t.nav.faq,
+    },
   ];
 
-  const go = (nextPage: DailyPage) => {
-    setPage(nextPage);
+  const closeMenuAndScroll = () => {
     setMenuOpen(false);
-    window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+
+    window.scrollTo({
+      top: 0,
+      behavior: 'instant' as ScrollBehavior,
+    });
   };
 
   return (
     <header className={styles.header}>
-      <button type="button" className={styles.brandButton} onClick={() => go('home')}>
+      <Link
+        to="/home"
+        className={styles.brandButton}
+        onClick={closeMenuAndScroll}
+        aria-label="Ir al inicio de Daily"
+      >
         <span className={styles.headerLogo}>
           <DailyLogo size={18} />
         </span>
@@ -48,18 +77,25 @@ export function DailyHeader({
           <strong>CONSEIN</strong>
           <span>Daily</span>
         </span>
-      </button>
+      </Link>
 
-      <nav className={styles.desktopNav}>
+      <nav
+        className={styles.desktopNav}
+        aria-label="Navegación principal"
+      >
         {navItems.map((item) => (
-          <button
-            key={item.key}
-            type="button"
-            className={`${styles.navLink} ${page === item.key ? styles.navLinkActive : ''}`}
-            onClick={() => go(item.key)}
+          <NavLink
+            key={item.path}
+            to={item.path}
+            onClick={closeMenuAndScroll}
+            className={({ isActive }) =>
+              `${styles.navLink} ${
+                isActive ? styles.navLinkActive : ''
+              }`
+            }
           >
             {item.label}
-          </button>
+          </NavLink>
         ))}
       </nav>
 
@@ -67,7 +103,14 @@ export function DailyHeader({
         <button
           type="button"
           className={styles.smallControl}
-          onClick={() => setLang(lang === 'es' ? 'en' : 'es')}
+          onClick={() =>
+            setLang(lang === 'es' ? 'en' : 'es')
+          }
+          aria-label={
+            lang === 'es'
+              ? 'Cambiar idioma a inglés'
+              : 'Change language to Spanish'
+          }
         >
           {lang === 'es' ? 'EN' : 'ES'}
         </button>
@@ -76,7 +119,11 @@ export function DailyHeader({
           type="button"
           className={styles.smallControl}
           onClick={() => setDark(!dark)}
-          aria-label="Cambiar tema"
+          aria-label={
+            dark
+              ? 'Activar tema claro'
+              : 'Activar tema oscuro'
+          }
         >
           {dark ? '☾' : '☀'}
         </button>
@@ -84,26 +131,44 @@ export function DailyHeader({
         <button
           type="button"
           className={styles.mobileMenuButton}
-          onClick={() => setMenuOpen((current) => !current)}
-          aria-label="Abrir menú"
+          onClick={() =>
+            setMenuOpen((current) => !current)
+          }
+          aria-label={
+            menuOpen
+              ? 'Cerrar menú'
+              : 'Abrir menú'
+          }
+          aria-expanded={menuOpen}
+          aria-controls="daily-mobile-menu"
         >
           {menuOpen ? '×' : '☰'}
         </button>
       </div>
 
       {menuOpen && (
-        <div className={styles.mobileMenu}>
+        <nav
+          id="daily-mobile-menu"
+          className={styles.mobileMenu}
+          aria-label="Navegación móvil"
+        >
           {navItems.map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              className={`${styles.mobileNavLink} ${page === item.key ? styles.mobileNavLinkActive : ''}`}
-              onClick={() => go(item.key)}
+            <NavLink
+              key={item.path}
+              to={item.path}
+              onClick={closeMenuAndScroll}
+              className={({ isActive }) =>
+                `${styles.mobileNavLink} ${
+                  isActive
+                    ? styles.mobileNavLinkActive
+                    : ''
+                }`
+              }
             >
               {item.label}
-            </button>
+            </NavLink>
           ))}
-        </div>
+        </nav>
       )}
     </header>
   );

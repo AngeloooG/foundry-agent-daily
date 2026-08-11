@@ -43,6 +43,7 @@
   background: transparent;
   color: inherit;
   cursor: pointer;
+  text-decoration: none;
 }
 
 .headerLogo {
@@ -86,6 +87,7 @@
   font-size: 14px;
   padding: 8px 0;
   position: relative;
+  text-decoration: none;
 }
 
 .navLink::after {
@@ -145,12 +147,14 @@
 
 .mobileNavLink {
   width: 100%;
+  display: block;
   border: none;
   background: transparent;
   color: #a8b4c2;
   padding: 12px;
   text-align: left;
   border-radius: 12px;
+  text-decoration: none;
 }
 
 .mobileNavLinkActive {
@@ -500,7 +504,8 @@
 }
 
 .chatPage {
-  height: calc(100vh - 64px);
+  height: calc(100dvh - 72px);
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -531,6 +536,7 @@
     grid-template-columns: 1fr;
   }
 }
+
 @keyframes pulse-ring {
   0% {
     transform: scale(1);
@@ -561,6 +567,7 @@
 }
 
 @keyframes float-node {
+
   0%,
   100% {
     transform: translateY(0);
@@ -1222,7 +1229,7 @@
   text-align: center;
 }
 
-.techSummary article + article {
+.techSummary article+article {
   border-left: 1px solid rgba(124, 188, 227, 0.1);
 }
 
@@ -1245,12 +1252,13 @@
 }
 
 @media (max-width: 920px) {
+
   .techStackGrid,
   .techSummary {
     grid-template-columns: 1fr;
   }
 
-  .techSummary article + article {
+  .techSummary article+article {
     border-left: none;
     border-top: 1px solid rgba(124, 188, 227, 0.1);
   }
