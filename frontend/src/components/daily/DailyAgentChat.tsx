@@ -5,6 +5,7 @@ import React, {
   useRef,
 } from 'react';
 
+import type { DailyTranslation } from '../../config/dailyTranslations';
 import { ChatService } from '../../services/chatService';
 import { useAppState } from '../../hooks/useAppState';
 import { useAuth } from '../../hooks/useAuth';
@@ -13,6 +14,7 @@ import { trackFeedback } from '../../services/telemetry';
 import { DailyChatInterface } from './DailyChatInterface';
 
 interface DailyAgentChatProps {
+  t: DailyTranslation;
   agentId: string;
   agentName: string;
   agentDescription?: string;
@@ -23,6 +25,7 @@ interface DailyAgentChatProps {
 }
 
 export const DailyAgentChat: React.FC<DailyAgentChatProps> = ({
+  t,
   agentName,
   agentDescription,
   starterPrompts,
@@ -35,19 +38,22 @@ export const DailyAgentChat: React.FC<DailyAgentChatProps> = ({
 
   const apiUrl = import.meta.env.VITE_API_URL || '/api';
 
-  const chatService = useMemo(() => {
-    return new ChatService(apiUrl, getAccessToken, dispatch);
-  }, [apiUrl, getAccessToken, dispatch]);
+  const chatService = useMemo(
+    () => new ChatService(apiUrl, getAccessToken, dispatch),
+    [apiUrl, getAccessToken, dispatch]
+  );
 
   const handleSendMessage = useCallback(
     async (text: string, files?: File[]) => {
-      if (chat.status === 'streaming' || chat.status === 'sending') {
+      if (
+        chat.status === 'streaming' ||
+        chat.status === 'sending'
+      ) {
         dispatch({
           type: 'CHAT_QUEUE_MESSAGE',
           text,
           files,
         });
-
         return;
       }
 
@@ -89,7 +95,9 @@ export const DailyAgentChat: React.FC<DailyAgentChatProps> = ({
     void chatService.sendMessage(
       combinedText,
       chat.currentConversationId,
-      combinedFiles.length > 0 ? combinedFiles : undefined
+      combinedFiles.length > 0
+        ? combinedFiles
+        : undefined
     );
   }, [
     chat.status,
@@ -114,10 +122,7 @@ export const DailyAgentChat: React.FC<DailyAgentChatProps> = ({
 
   const handleRegenerate = useCallback(() => {
     chatService.cancelStream();
-
-    dispatch({
-      type: 'CHAT_REGENERATE',
-    });
+    dispatch({ type: 'CHAT_REGENERATE' });
   }, [chatService, dispatch]);
 
   const handleEditMessage = useCallback(
@@ -132,9 +137,7 @@ export const DailyAgentChat: React.FC<DailyAgentChatProps> = ({
   );
 
   const handleCancelEdit = useCallback(() => {
-    dispatch({
-      type: 'CHAT_CANCEL_EDIT',
-    });
+    dispatch({ type: 'CHAT_CANCEL_EDIT' });
   }, [dispatch]);
 
   const handleFeedback = useCallback(
@@ -158,9 +161,7 @@ export const DailyAgentChat: React.FC<DailyAgentChatProps> = ({
       return;
     }
 
-    dispatch({
-      type: 'CHAT_CONSUMED_REGENERATE',
-    });
+    dispatch({ type: 'CHAT_CONSUMED_REGENERATE' });
 
     void chatService.sendMessage(
       regenerateText,
@@ -176,6 +177,7 @@ export const DailyAgentChat: React.FC<DailyAgentChatProps> = ({
 
   return (
     <DailyChatInterface
+      t={t}
       messages={chat.messages}
       status={chat.status}
       error={chat.error}
@@ -191,7 +193,9 @@ export const DailyAgentChat: React.FC<DailyAgentChatProps> = ({
       onSendMessage={handleSendMessage}
       onClearError={handleClearError}
       onCancelStream={handleCancelStream}
-      onRecoveredInputConsumed={handleRecoveredInputConsumed}
+      onRecoveredInputConsumed={
+        handleRecoveredInputConsumed
+      }
       onInitialDraftConsumed={onInitialDraftConsumed}
       onRegenerate={handleRegenerate}
       onEditMessage={handleEditMessage}
