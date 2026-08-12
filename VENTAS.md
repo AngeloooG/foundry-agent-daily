@@ -1,5 +1,8 @@
 # Daily
 
+🌐 **Aplicación web desplegada:** [Abrir Daily en Azure Container Apps](https://ca-web-blx2jbksxc7iu.mangowater-021e961f.centralus.azurecontainerapps.io/home)
+
+
 ## Convierta la experiencia de su empresa en un activo que todos puedan consultar
 
 En muchas organizaciones, las respuestas más valiosas no están en un solo sistema. Están distribuidas entre documentos, proyectos, correos, sitios de SharePoint y la experiencia de colaboradores específicos.
