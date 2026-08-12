@@ -1,11 +1,12 @@
 import { useNavigate } from 'react-router-dom';
 
+import type { DailyTranslation } from '../../config/dailyTranslations';
 import { DailyLogo } from './DailyLogo';
 import NeuralNetwork from './NeuralNetwork';
 import styles from './DailyShell.module.css';
 
 interface DailyHomeProps {
-    t: any;
+    t: DailyTranslation;
     dark: boolean;
 }
 
@@ -101,7 +102,7 @@ export function DailyHome({ t, dark }: DailyHomeProps) {
                                 <div>
                                     <strong>Daily</strong>
                                     <span>
-                                        <i /> online · CONSEIN
+                                        <i /> {t.home.preview.agentStatus}
                                     </span>
                                 </div>
                             </div>
@@ -118,7 +119,7 @@ export function DailyHome({ t, dark }: DailyHomeProps) {
                         </div>
 
                         <div className={styles.previewUserBubble}>
-                            ¿Quién ha trabajado con Azure AI Search?
+                            {t.home.preview.userQuestion}
                         </div>
 
                         <div className={styles.previewAssistantRow}>
@@ -128,28 +129,24 @@ export function DailyHome({ t, dark }: DailyHomeProps) {
 
                             <div className={styles.previewAssistantColumn}>
                                 <div className={styles.previewAssistantBubble}>
-                                    Encontré 3 proyectos y 2 especialistas con experiencia
-                                    documentada.
+                                    {t.home.preview.assistantAnswer}
                                 </div>
 
-                                <div className={styles.previewCase}>
-                                    <strong>Proyecto Atlas</strong>
-                                    <span>Alta</span>
-                                </div>
-
-                                <div className={styles.previewCase}>
-                                    <strong>Proyecto Meridian</strong>
-                                    <span>Alta</span>
-                                </div>
+                                {t.home.preview.projects.map((project) => (
+                                    <div key={project.name} className={styles.previewCase}>
+                                        <strong>{project.name}</strong>
+                                        <span>{project.relevance}</span>
+                                    </div>
+                                ))}
                             </div>
                         </div>
 
                         <div className={styles.previewInput}>
-                            <span>Pregunta sobre un proyecto o especialista...</span>
+                            <span>{t.home.preview.placeholder}</span>
                             <button
                                 type="button"
                                 onClick={openDaily}
-                                aria-label="Consultar Daily"
+                                aria-label={t.home.preview.openChatLabel}
                             >
                                 →
                             </button>
@@ -290,17 +287,15 @@ export function DailyHome({ t, dark }: DailyHomeProps) {
                     <DailyLogo size={28} />
                 </div>
 
-                <h2>Consulta la memoria de CONSEIN</h2>
-                <p>
-                    Daily convierte la experiencia acumulada en respuestas accionables.
-                </p>
+                <h2>{t.home.finalCta.title}</h2>
+                <p>{t.home.finalCta.description}</p>
 
                 <button
                     type="button"
                     className={styles.primaryButton}
                     onClick={openDaily}
                 >
-                    Consultar Daily →
+                    {t.home.finalCta.button} →
                 </button>
             </section>
         </main>

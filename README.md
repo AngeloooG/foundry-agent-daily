@@ -1,5 +1,8 @@
 # Daily | Memoria empresarial inteligente de CONSEIN
 
+🌐 **Aplicación web desplegada:** [Abrir Daily en Azure Container Apps](https://ca-web-blx2jbksxc7iu.mangowater-021e961f.centralus.azurecontainerapps.io/home)
+
+
 > **Daily transforma conocimiento validado de proyectos, especialistas y soluciones en respuestas empresariales accionables.**
 
 Daily es un agente de consulta inteligente diseñado para recuperar y relacionar conocimiento reutilizable de CONSEIN. Permite formular preguntas en lenguaje natural y obtener respuestas sustentadas en experiencias previamente capturadas, revisadas y publicadas.

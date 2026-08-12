@@ -1,4 +1,8 @@
-import { useEffect, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useState,
+} from 'react';
 import {
   Navigate,
   Route,
@@ -11,14 +15,13 @@ import type { IAgentMetadata } from '../../types/chat';
 import {
   dailyTranslations,
   type DailyLang,
+  type DailyTranslation,
 } from '../../config/dailyTranslations';
-
 import { DailyAgentChat } from './DailyAgentChat';
 import { DailyHeader } from './DailyHeader';
 import { DailyHome } from './DailyHome';
 import { DailyTechnology } from './DailyTechnology';
 import { DailyFAQ } from './DailyFAQ';
-
 import styles from './DailyShell.module.css';
 
 interface DailyShellProps {
@@ -43,10 +46,14 @@ export function DailyShell({
       !dark
     );
 
+    document.documentElement.lang = lang;
+
     return () => {
-      document.documentElement.classList.remove('daily-light');
+      document.documentElement.classList.remove(
+        'daily-light'
+      );
     };
-  }, [dark]);
+  }, [dark, lang]);
 
   return (
     <div
@@ -69,12 +76,7 @@ export function DailyShell({
 
         <Route
           path="/home"
-          element={
-            <DailyHome
-              t={t}
-              dark={dark}
-            />
-          }
+          element={<DailyHome t={t} dark={dark} />}
         />
 
         <Route
@@ -82,6 +84,7 @@ export function DailyShell({
           element={
             <DailyChatRoute
               agentMetadata={agentMetadata}
+              t={t}
             />
           }
         />
@@ -107,10 +110,12 @@ export function DailyShell({
 
 interface DailyChatRouteProps {
   agentMetadata: IAgentMetadata;
+  t: DailyTranslation;
 }
 
 function DailyChatRoute({
   agentMetadata,
+  t,
 }: DailyChatRouteProps) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -123,7 +128,7 @@ function DailyChatRoute({
       ? navigationState.draftQuestion.trim()
       : '';
 
-  const consumeDraft = () => {
+  const consumeDraft = useCallback(() => {
     if (!draftQuestion) {
       return;
     }
@@ -132,21 +137,16 @@ function DailyChatRoute({
       replace: true,
       state: null,
     });
-  };
+  }, [draftQuestion, location.pathname, navigate]);
 
   return (
     <div className={styles.chatPage}>
       <DailyAgentChat
+        t={t}
         agentId={agentMetadata.id}
         agentName={agentMetadata.name || 'Daily'}
-        agentDescription={
-          agentMetadata.description ||
-          'Agente de conocimiento empresarial de CONSEIN'
-        }
+        agentDescription={t.chat.defaultAgentDescription}
         agentLogo={agentMetadata.metadata?.logo}
-        starterPrompts={
-          agentMetadata.starterPrompts || undefined
-        }
         initialDraft={draftQuestion}
         onInitialDraftConsumed={consumeDraft}
       />

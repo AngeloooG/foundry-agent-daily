@@ -1,7 +1,14 @@
-import { useEffect, useRef, useState } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeSanitize from 'rehype-sanitize';
+
+import type { DailyTranslation } from '../../config/dailyTranslations';
 import type { IChatItem, IFileAttachment } from '../../types/chat';
 import type { AppState } from '../../types/appState';
 import type { AppError } from '../../types/errors';
@@ -9,6 +16,7 @@ import { DailyLogo } from './DailyLogo';
 import styles from './DailyChatInterface.module.css';
 
 interface DailyChatInterfaceProps {
+  t: DailyTranslation;
   messages: IChatItem[];
   status: AppState['chat']['status'];
   error: AppError | null;
@@ -20,36 +28,32 @@ interface DailyChatInterfaceProps {
   agentDescription?: string;
   starterPrompts?: string[];
   isEditing?: boolean;
+  initialDraft?: string;
   onSendMessage: (text: string, files?: File[]) => void;
   onClearError?: () => void;
   onCancelStream?: () => void;
   onRecoveredInputConsumed?: () => void;
+  onInitialDraftConsumed?: () => void;
   onRegenerate?: () => void;
   onEditMessage?: (messageId: string, newText: string) => void;
   onCancelEdit?: () => void;
-  onFeedback?: (messageId: string, rating: 'positive' | 'negative') => void;
-  initialDraft?: string;
-  onInitialDraftConsumed?: () => void;
+  onFeedback?: (
+    messageId: string,
+    rating: 'positive' | 'negative'
+  ) => void;
 }
 
-const DEFAULT_PROMPTS = [
-  '¿Quién ha trabajado con Azure AI Search?',
-  '¿Qué aprendimos en Copilot Studio?',
-  'Soluciones con Power Automate',
-  '¿Casos sobre migración a Azure SQL?',
-  '¿Agentes internos en CONSEIN?',
-  '¿Errores en índices semánticos?',
-];
-
 export function DailyChatInterface({
+  t,
   messages,
   status,
   error,
   streamingMessageId,
   recoveredInput,
+  recoveredAttachments = [],
   pendingMessages = [],
   agentName = 'Daily',
-  agentDescription = 'Agente de conocimiento empresarial',
+  agentDescription,
   starterPrompts,
   isEditing,
   initialDraft,
@@ -57,14 +61,15 @@ export function DailyChatInterface({
   onClearError,
   onCancelStream,
   onRecoveredInputConsumed,
+  onInitialDraftConsumed,
   onRegenerate,
   onEditMessage,
   onCancelEdit,
   onFeedback,
-  onInitialDraftConsumed,
 }: DailyChatInterfaceProps) {
   const [input, setInput] = useState(recoveredInput || '');
   const [files, setFiles] = useState<File[]>([]);
+
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -72,56 +77,90 @@ export function DailyChatInterface({
   const isStreaming = status === 'streaming';
   const isSending = status === 'sending';
   const isBusy = isStreaming || isSending;
-  const prompts = starterPrompts?.length ? starterPrompts : DEFAULT_PROMPTS;
+
+  const prompts = starterPrompts?.length
+    ? starterPrompts
+    : t.chat.defaultPrompts;
+
+  const visibleAgentDescription =
+    agentDescription || t.chat.defaultAgentDescription;
 
   const selectPrompt = (prompt: string) => {
     setInput(prompt);
 
     window.requestAnimationFrame(() => {
       textareaRef.current?.focus();
-
-      const cursorPosition = prompt.length;
-      textareaRef.current?.setSelectionRange(cursorPosition, cursorPosition);
+      textareaRef.current?.setSelectionRange(
+        prompt.length,
+        prompt.length
+      );
     });
   };
 
   useEffect(() => {
-    if (recoveredInput) {
-      setInput(recoveredInput);
-      onRecoveredInputConsumed?.();
+    if (!recoveredInput) {
+      return;
     }
+
+    setInput(recoveredInput);
+    onRecoveredInputConsumed?.();
   }, [recoveredInput, onRecoveredInputConsumed]);
 
   useEffect(() => {
+    if (recoveredAttachments.length === 0) {
+      return;
+    }
+
+    // Recovered attachments are already represented by the application state.
+    // File objects cannot be reconstructed safely from attachment metadata.
+    textareaRef.current?.focus();
+  }, [recoveredAttachments]);
+
+  useEffect(() => {
     const draft = initialDraft?.trim();
+
     if (!draft) {
       return;
     }
+
     setInput(draft);
     onInitialDraftConsumed?.();
 
     window.requestAnimationFrame(() => {
       textareaRef.current?.focus();
-      const cursorPosition = draft.length;
-      textareaRef.current?.setSelectionRange(cursorPosition, cursorPosition);
+      textareaRef.current?.setSelectionRange(
+        draft.length,
+        draft.length
+      );
     });
   }, [initialDraft, onInitialDraftConsumed]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    bottomRef.current?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'end',
+    });
   }, [messages, status]);
 
-  const submit = (text?: string) => {
-    const value = (text ?? input).trim();
+  const submit = () => {
+    const value = input.trim();
 
-    if (!value || isBusy) return;
+    if (!value || isBusy) {
+      return;
+    }
 
-    onSendMessage(value, files.length > 0 ? files : undefined);
+    onSendMessage(
+      value,
+      files.length > 0 ? files : undefined
+    );
+
     setInput('');
     setFiles([]);
   };
 
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+  const handleKeyDown = (
+    event: KeyboardEvent<HTMLTextAreaElement>
+  ) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       submit();
@@ -129,12 +168,20 @@ export function DailyChatInterface({
   };
 
   const handleFiles = (fileList: FileList | null) => {
-    if (!fileList) return;
-    setFiles((current) => [...current, ...Array.from(fileList)]);
+    if (!fileList) {
+      return;
+    }
+
+    setFiles((current) => [
+      ...current,
+      ...Array.from(fileList),
+    ]);
   };
 
   const removeFile = (index: number) => {
-    setFiles((current) => current.filter((_, i) => i !== index));
+    setFiles((current) =>
+      current.filter((_, currentIndex) => currentIndex !== index)
+    );
   };
 
   return (
@@ -142,30 +189,34 @@ export function DailyChatInterface({
       <main className={styles.main}>
         <header className={styles.topbar}>
           <div>
-            <div className={styles.kicker}>Agente de conocimiento empresarial</div>
+            <div className={styles.kicker}>{t.chat.kicker}</div>
             <h1>{agentName}</h1>
-            <p>{agentDescription}</p>
+            <p>{visibleAgentDescription}</p>
           </div>
 
           <div className={styles.statusPill}>
             <span className={styles.statusDot} />
-            {isStreaming ? 'respondiendo' : 'online'}
+            {isStreaming
+              ? t.chat.status.responding
+              : t.chat.status.online}
           </div>
         </header>
 
-        <section className={styles.messagesArea} aria-label="Chat de Daily">
+        <section
+          className={styles.messagesArea}
+          aria-label={t.chat.ariaLabel}
+        >
           {messages.length === 0 ? (
             <div className={styles.welcome}>
               <div className={styles.welcomeLogo}>
                 <DailyLogo size={30} />
               </div>
 
-              <h2>Hola, soy {agentName}</h2>
+              <h2>
+                {t.chat.welcome.title} {agentName}
+              </h2>
 
-              <p>
-                Puedes preguntarme por experiencias, especialistas, proyectos, soluciones,
-                tecnologías o aprendizajes documentados en CONSEIN.
-              </p>
+              <p>{t.chat.welcome.description}</p>
 
               <div className={styles.promptGrid}>
                 {prompts.map((prompt, index) => (
@@ -185,12 +236,17 @@ export function DailyChatInterface({
             <div className={styles.thread}>
               {messages.map((message) => {
                 const isUser = message.role === 'user';
-                const isCurrentStreaming = isStreaming && message.id === streamingMessageId;
+                const isCurrentStreaming =
+                  isStreaming &&
+                  message.id === streamingMessageId;
 
                 return (
                   <article
                     key={message.id}
-                    className={`${styles.messageRow} ${isUser ? styles.userRow : styles.assistantRow}`}
+                    className={`${styles.messageRow} ${isUser
+                        ? styles.userRow
+                        : styles.assistantRow
+                      }`}
                   >
                     {!isUser && (
                       <div className={styles.avatar}>
@@ -198,40 +254,79 @@ export function DailyChatInterface({
                       </div>
                     )}
 
-                    <div className={`${styles.bubble} ${isUser ? styles.userBubble : styles.assistantBubble}`}>
+                    <div
+                      className={`${styles.bubble} ${isUser
+                          ? styles.userBubble
+                          : styles.assistantBubble
+                        }`}
+                    >
                       {!isUser && (
                         <div className={styles.assistantMeta}>
                           <span>{agentName}</span>
-                          {isCurrentStreaming && <span>generando...</span>}
+                          {isCurrentStreaming && (
+                            <span>
+                              {t.chat.status.generating}
+                            </span>
+                          )}
                         </div>
                       )}
 
                       <div className={styles.markdown}>
-                        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          rehypePlugins={[rehypeSanitize]}
+                        >
                           {message.content || ''}
                         </ReactMarkdown>
                       </div>
 
                       {!isUser && !isCurrentStreaming && (
                         <div className={styles.messageActions}>
-                          <button type="button" onClick={onRegenerate}>
-                            Regenerar
+                          <button
+                            type="button"
+                            onClick={onRegenerate}
+                          >
+                            {t.chat.actions.regenerate}
                           </button>
 
-                          <button type="button" onClick={() => onFeedback?.(message.id, 'positive')}>
-                            Útil
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onFeedback?.(
+                                message.id,
+                                'positive'
+                              )
+                            }
+                          >
+                            {t.chat.actions.helpful}
                           </button>
 
-                          <button type="button" onClick={() => onFeedback?.(message.id, 'negative')}>
-                            No útil
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onFeedback?.(
+                                message.id,
+                                'negative'
+                              )
+                            }
+                          >
+                            {t.chat.actions.notHelpful}
                           </button>
                         </div>
                       )}
 
                       {isUser && onEditMessage && (
                         <div className={styles.messageActions}>
-                          <button type="button" onClick={() => onEditMessage(message.id, message.content)}>
-                            Editar
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onEditMessage(
+                                message.id,
+                                message.content
+                              )
+                            }
+                          >
+                            {t.chat.actions.edit}
                           </button>
                         </div>
                       )}
@@ -242,7 +337,8 @@ export function DailyChatInterface({
 
               {pendingMessages.length > 0 && (
                 <div className={styles.pendingBox}>
-                  {pendingMessages.length} mensaje(s) en cola. Se enviarán al terminar la respuesta actual.
+                  {pendingMessages.length}{' '}
+                  {t.chat.queueSuffix}
                 </div>
               )}
 
@@ -256,20 +352,27 @@ export function DailyChatInterface({
             <span>
               {typeof error.message === 'string'
                 ? error.message
-                : error.originalError?.message || 'Ocurrió un error inesperado.'}
+                : error.originalError?.message ||
+                t.chat.fallbackError}
             </span>
 
-            <button type="button" onClick={onClearError}>
-              Cerrar
+            <button
+              type="button"
+              onClick={onClearError}
+            >
+              {t.chat.actions.close}
             </button>
           </div>
         )}
 
         {isEditing && (
           <div className={styles.editBar}>
-            <span>Modo edición activo</span>
-            <button type="button" onClick={onCancelEdit}>
-              Cancelar
+            <span>{t.chat.editingMode}</span>
+            <button
+              type="button"
+              onClick={onCancelEdit}
+            >
+              {t.chat.actions.cancel}
             </button>
           </div>
         )}
@@ -283,7 +386,8 @@ export function DailyChatInterface({
                   type="button"
                   className={styles.fileChip}
                   onClick={() => removeFile(index)}
-                  title="Quitar archivo"
+                  title={t.chat.actions.removeFile}
+                  aria-label={`${t.chat.actions.removeFile}: ${file.name}`}
                 >
                   {file.name} ×
                 </button>
@@ -297,7 +401,7 @@ export function DailyChatInterface({
               className={styles.iconButton}
               onClick={() => fileInputRef.current?.click()}
               disabled={isBusy}
-              aria-label="Adjuntar archivo"
+              aria-label={t.chat.actions.attach}
             >
               +
             </button>
@@ -307,23 +411,27 @@ export function DailyChatInterface({
               value={input}
               onChange={(event) => setInput(event.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Pregunta sobre una solución, tecnología, especialista, proyecto o problema similar..."
+              placeholder={t.chat.placeholder}
               rows={1}
-              disabled={isSending}
+              disabled={isBusy}
             />
 
             {isStreaming ? (
-              <button type="button" className={styles.sendButton} onClick={onCancelStream}>
-                Detener
+              <button
+                type="button"
+                className={styles.sendButton}
+                onClick={onCancelStream}
+              >
+                {t.chat.actions.stop}
               </button>
             ) : (
               <button
                 type="button"
                 className={styles.sendButton}
-                onClick={() => submit()}
+                onClick={submit}
                 disabled={!input.trim() || isSending}
               >
-                Enviar
+                {t.chat.actions.send}
               </button>
             )}
 
@@ -332,7 +440,9 @@ export function DailyChatInterface({
               type="file"
               multiple
               hidden
-              onChange={(event) => handleFiles(event.target.files)}
+              onChange={(event) =>
+                handleFiles(event.target.files)
+              }
             />
           </div>
         </footer>
