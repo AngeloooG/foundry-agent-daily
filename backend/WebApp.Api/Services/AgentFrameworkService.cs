@@ -23,7 +23,7 @@ namespace WebApp.Api.Services;
 /// metadata and ProjectResponsesClient for streaming (required for annotations, MCP approvals).
 /// See .github/skills/researching-azure-ai-sdk/SKILL.md for SDK patterns.
 /// </remarks>
-public class AgentFrameworkService : IDisposable
+public class AgentFrameworkService : IAgentFrameworkService, IDisposable
 {
     private readonly string _agentEndpoint;
     private readonly string _agentId;
