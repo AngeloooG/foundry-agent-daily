@@ -131,7 +131,7 @@ builder.Services.AddAuthorization(options =>
 // Register Foundry Agent Service (v2 Agents API)
 // Uses Azure.AI.Projects SDK which works with v2 Agents API (/agents/ endpoint with human-readable IDs).
 builder.Services.AddHttpClient();
-builder.Services.AddScoped<AgentFrameworkService>();
+builder.Services.AddScoped<IAgentFrameworkService, AgentFrameworkService>();
 
 var app = builder.Build();
 
@@ -168,7 +168,7 @@ app.MapGet("/api/health", () => Results.Ok(new { status = "healthy" }))
 // Supports MCP tool approval flow with previousResponseId and mcpApproval parameters
 app.MapPost("/api/chat/stream", async (
     ChatRequest request,
-    AgentFrameworkService agentService,
+    IAgentFrameworkService agentService,
     HttpContext httpContext,
     IHostEnvironment environment,
     CancellationToken cancellationToken) =>
@@ -348,7 +348,7 @@ static async Task WriteErrorEvent(HttpResponse response, string message, Cancell
 // Get agent metadata (name, description, model, metadata)
 // Used by frontend to display agent information in the UI
 app.MapGet("/api/agent", async (
-    AgentFrameworkService agentService,
+    IAgentFrameworkService agentService,
     IHostEnvironment environment,
     CancellationToken cancellationToken) =>
 {
@@ -377,7 +377,7 @@ app.MapGet("/api/agent", async (
 
 // Get agent info (for debugging)
 app.MapGet("/api/agent/info", async (
-    AgentFrameworkService agentService,
+    IAgentFrameworkService agentService,
     IHostEnvironment environment,
     CancellationToken cancellationToken) =>
 {
@@ -410,7 +410,7 @@ app.MapGet("/api/agent/info", async (
 
 // List conversations
 app.MapGet("/api/conversations", async (
-    AgentFrameworkService agentService,
+    IAgentFrameworkService agentService,
     IHostEnvironment environment,
     int? limit,
     CancellationToken cancellationToken) =>
@@ -444,7 +444,7 @@ app.MapGet("/api/conversations", async (
 // Get conversation messages
 app.MapGet("/api/conversations/{conversationId}/messages", async (
     string conversationId,
-    AgentFrameworkService agentService,
+    IAgentFrameworkService agentService,
     IHostEnvironment environment,
     CancellationToken cancellationToken) =>
 {
@@ -470,7 +470,7 @@ app.MapGet("/api/conversations/{conversationId}/messages", async (
 // Delete conversation
 app.MapDelete("/api/conversations/{conversationId}", async (
     string conversationId,
-    AgentFrameworkService agentService,
+    IAgentFrameworkService agentService,
     IHostEnvironment environment,
     CancellationToken cancellationToken) =>
 {
@@ -505,7 +505,7 @@ app.MapDelete("/api/conversations/{conversationId}", async (
 app.MapGet("/api/files/{fileId}", async (
     string fileId,
     string? containerId,
-    AgentFrameworkService agentService,
+    IAgentFrameworkService agentService,
     IHostEnvironment environment,
     CancellationToken cancellationToken) =>
 {
@@ -545,7 +545,7 @@ app.MapGet("/api/files/{fileId}", async (
 // operation to our own files, because the Foundry Files API does not expose a typed
 // expires_after parameter in the GA SDK (see README "Known limitations").
 app.MapGet("/api/files/uploaded", async (
-    AgentFrameworkService agentService,
+    IAgentFrameworkService agentService,
     IHostEnvironment environment,
     CancellationToken cancellationToken) =>
 {
@@ -569,7 +569,7 @@ app.MapGet("/api/files/uploaded", async (
 .WithName("ListUploadedFiles");
 
 app.MapPost("/api/files/cleanup", async (
-    AgentFrameworkService agentService,
+    IAgentFrameworkService agentService,
     IHostEnvironment environment,
     CancellationToken cancellationToken) =>
 {
@@ -619,3 +619,6 @@ static string GetMimeType(string fileName)
         _ => "application/octet-stream",
     };
 }
+
+/// <summary>Exposed for WebApplicationFactory-based integration tests.</summary>
+public partial class Program;
