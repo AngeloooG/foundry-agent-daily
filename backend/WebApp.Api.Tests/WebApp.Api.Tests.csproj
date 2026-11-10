@@ -11,8 +11,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Pin transitive dependency to patched version (addresses GHSA-37gx-xxp4-5rgx / GHSA-w3x6-4m5h-cxqf) -->
-    <PackageReference Include="System.Security.Cryptography.Xml" Version="10.0.6" />
+    <!-- Pin transitive dependency to a patched version (GHSA-37gx-xxp4-5rgx, GHSA-w3x6-4m5h-cxqf,
+         CVE-2026-47302 and related; affected <= 10.0.9). -->
+    <PackageReference Include="System.Security.Cryptography.Xml" Version="10.0.14" />
   </ItemGroup>
 
 </Project>
