@@ -86,6 +86,8 @@ export function DailyChatInterface({
   const [input, setInput] = useState(recoveredInput || '');
   const [files, setFiles] = useState<File[]>([]);
   const [attachmentIssues, setAttachmentIssues] = useState<AttachmentIssue[]>([]);
+  // Files of the last submitted message, restored together with the text if the send fails.
+  const lastSubmittedFilesRef = useRef<File[]>([]);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -120,6 +122,7 @@ export function DailyChatInterface({
     }
 
     setInput(recoveredInput);
+    setFiles(lastSubmittedFilesRef.current);
     onRecoveredInputConsumed?.();
   }, [recoveredInput, onRecoveredInputConsumed]);
 
@@ -173,6 +176,7 @@ export function DailyChatInterface({
       return;
     }
 
+    lastSubmittedFilesRef.current = files;
     onSendMessage(
       value,
       files.length > 0 ? files : undefined

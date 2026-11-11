@@ -1,15 +1,13 @@
 import React, {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
 } from 'react';
 
 import type { DailyTranslation } from '../../config/dailyTranslations';
-import { ChatService } from '../../services/chatService';
 import { useAppState } from '../../hooks/useAppState';
-import { useAuth } from '../../hooks/useAuth';
 import { useAppContext } from '../../contexts/AppContext';
+import { useChatService } from '../../contexts/ChatServiceContext';
 import { trackFeedback } from '../../services/telemetry';
 import { DailyChatInterface } from './DailyChatInterface';
 
@@ -34,14 +32,8 @@ export const DailyAgentChat: React.FC<DailyAgentChatProps> = ({
 }) => {
   const { chat } = useAppState();
   const { dispatch } = useAppContext();
-  const { getAccessToken } = useAuth();
-
-  const apiUrl = import.meta.env.VITE_API_URL || '/api';
-
-  const chatService = useMemo(
-    () => new ChatService(apiUrl, getAccessToken, dispatch),
-    [apiUrl, getAccessToken, dispatch]
-  );
+  // Session-wide service: survives navigation, so "Stop" always reaches the running stream.
+  const chatService = useChatService();
 
   const handleSendMessage = useCallback(
     async (text: string, files?: File[]) => {

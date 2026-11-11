@@ -82,7 +82,12 @@ export type AppAction =
   | { type: 'CHAT_ADD_ASSISTANT_MESSAGE'; messageId: string }
   | { type: 'CHAT_LOAD_CONVERSATION'; conversationId: string; messages: IChatItem[] }
   | { type: 'CHAT_STREAM_RETRY'; messageId: string; attempt: number; maxRetries: number }
-  | { type: 'CHAT_RECOVER_MESSAGE'; messageText: string; error: AppError; retryCount: number }
+  /**
+   * Restore the user's text after a failed send. `messageIds` lists the optimistic messages to
+   * remove (empty when the send failed before they were added); when omitted, the last two
+   * messages are removed (legacy behavior).
+   */
+  | { type: 'CHAT_RECOVER_MESSAGE'; messageText: string; error: AppError; retryCount: number; messageIds?: string[] }
   | { type: 'CHAT_CONSUMED_RECOVERED_INPUT' }
   | { type: 'CHAT_QUEUE_MESSAGE'; text: string; files?: File[] }
   | { type: 'CHAT_DEQUEUE_MESSAGE'; index: number }
