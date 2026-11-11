@@ -78,10 +78,25 @@ public sealed class FakeFoundry : IAgentFrameworkService, IConversationOwnership
     public Task DeleteConversationAsync(string conversationId, CancellationToken cancellationToken = default) =>
         throw new NotSupportedException("Conversation deletion is not yet supported by the Azure.AI.Projects SDK.");
 
-    public Task<(BinaryData Content, string FileName)> DownloadFileAsync(string fileId, string? containerId = null, CancellationToken cancellationToken = default)
+    /// <summary>Size Foundry reports for the cited file (bytes). Default: the 9 bytes of "contenido".</summary>
+    public long CitedFileSize { get; set; } = 9;
+
+    public string CitedFileName { get; set; } = "reporte.csv";
+
+    /// <summary>Times the file content was actually produced (after the size check).</summary>
+    public int ContentLoads;
+
+    public Task<(BinaryData Content, string FileName)> DownloadFileAsync(string fileId, string? containerId, long maxBytes, CancellationToken cancellationToken = default)
     {
         Interlocked.Increment(ref DownloadCalls);
-        return Task.FromResult((BinaryData.FromString("contenido"), "reporte.csv"));
+
+        // Same rule as AgentFrameworkService: a size known to exceed the limit is rejected before
+        // any content is loaded.
+        DownloadLimits.EnsureWithinLimit(CitedFileSize, maxBytes);
+
+        Interlocked.Increment(ref ContentLoads);
+        var content = CitedFileSize == 9 ? BinaryData.FromString("contenido") : BinaryData.FromBytes(new byte[CitedFileSize]);
+        return Task.FromResult((content, CitedFileName));
     }
 
     public Task<AgentMetadataResponse> GetAgentMetadataAsync(CancellationToken cancellationToken = default) =>

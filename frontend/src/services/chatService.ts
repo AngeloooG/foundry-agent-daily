@@ -290,7 +290,6 @@ export class ChatService {
     }
 
     const decoder = new TextDecoder();
-    let lastChunkContent: string | undefined;
     let buffer = '';
     let completed = false;
 
@@ -316,10 +315,11 @@ export class ChatService {
               break;
 
             case 'chunk':
-              if (event.data.content !== lastChunkContent) {
-                this.dispatch({ type: 'CHAT_STREAM_CHUNK', messageId, content: event.data.content });
-                lastChunkContent = event.data.content;
-              }
+              // Every chunk is a delta and must be appended, even when it equals the previous one
+              // ("\n" + "\n", " " + " ", repeated tokens). Never deduplicate by content: the stream
+              // has no event ids, and a single HTTP response does not replay events. Idempotency,
+              // if ever needed, must rely on a server-provided event id, not on the text.
+              this.dispatch({ type: 'CHAT_STREAM_CHUNK', messageId, content: event.data.content });
               break;
 
             case 'annotations':

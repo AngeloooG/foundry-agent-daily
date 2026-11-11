@@ -395,6 +395,7 @@ api.MapGet("/files/{fileId}", async (
     IAgentFrameworkService agentService,
     IConversationOwnershipStore ownership,
     IAuthorizationService authorization,
+    IOptions<ChatLimitsOptions> limitsOptions,
     HttpContext httpContext,
     CancellationToken cancellationToken) =>
 {
@@ -403,13 +404,16 @@ api.MapGet("/files/{fileId}", async (
         throw new RequestValidationException("The conversationId query parameter is required.");
     }
 
+    // Ownership and file association first: a non-owner gets 404 and learns nothing about the file.
     if (!await IsConversationOwnerAsync(authorization, httpContext.User, conversationId)
         || !await ownership.IsFileAuthorizedAsync(conversationId, fileId, containerId, cancellationToken))
     {
         return Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Not Found", detail: "File not found.");
     }
 
-    var (content, fileName) = await agentService.DownloadFileAsync(fileId, containerId, cancellationToken);
+    // Files above ChatLimits:MaxDownloadBytes → FileTooLargeException → 413 ProblemDetails.
+    var (content, fileName) = await agentService.DownloadFileAsync(
+        fileId, containerId, limitsOptions.Value.MaxDownloadBytes, cancellationToken);
     // Results.File with a file name sends Content-Disposition: attachment.
     return Results.File(content.ToArray(), GetSafeContentType(fileName), fileName);
 })

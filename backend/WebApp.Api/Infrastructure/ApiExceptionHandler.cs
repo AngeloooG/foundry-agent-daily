@@ -58,6 +58,7 @@ public sealed class ApiExceptionHandler(
     /// <summary>Maps an exception to the HTTP status returned to the client.</summary>
     public static int MapStatusCode(Exception exception) => exception switch
     {
+        FileTooLargeException => StatusCodes.Status413PayloadTooLarge,
         RequestValidationException => StatusCodes.Status400BadRequest,
         UnauthorizedAccessException => StatusCodes.Status401Unauthorized,
         ClientResultException { Status: 404 } => StatusCodes.Status404NotFound,
@@ -79,6 +80,14 @@ public sealed class ApiExceptionHandler(
             Title = error.Title,
             Detail = error.Detail
         };
+
+        if (exception is FileTooLargeException tooLarge)
+        {
+            // Safe in every environment: it states the configured limit, never the file's real size.
+            problem.Title = "Payload Too Large";
+            problem.Detail = tooLarge.Message;
+            problem.Extensions["maxBytes"] = tooLarge.MaxBytes;
+        }
 
         if (exception is RequestValidationException validation)
         {
