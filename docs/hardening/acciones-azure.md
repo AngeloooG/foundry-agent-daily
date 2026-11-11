@@ -27,3 +27,11 @@ Convenciones: suscripción `b6d04525-e7b4-4b17-8492-2471f9779962`, grupo `rg-dai
 - **Comando:** el flujo habitual de despliegue (`azd deploy`), solo después de fusionar este trabajo y con el IaC reconciliado (ver lote 7).
 - **Comprobación previa:** `az containerapp show --name ca-web-blx2jbksxc7iu --resource-group rg-daily-enhanced-dev-centralus --subscription b6d04525-e7b4-4b17-8492-2471f9779962 --query "properties.template.containers[0].image" -o tsv`.
 - **Rollback:** reactivar la revisión anterior de la Container App.
+
+## A3. Retención de imágenes subidas por la web app
+
+- **Objetivo:** las imágenes que los usuarios adjuntan se suben a Files de Foundry con el prefijo `webapp-upload-` y no caducan (la API GA no admite `expires_after`). El endpoint público de limpieza se eliminó en el lote 2 porque cualquier usuario podía borrar las de todos.
+- **Propuesta:** tarea operativa periódica (por ejemplo, un script ejecutado por el equipo de operaciones con su propia identidad) que liste los archivos con propósito `assistants` y prefijo `webapp-upload-` más antiguos de N días y los borre. Antes de borrar, comprobar que ninguna conversación activa los necesita (las respuestas ya generadas no se ven afectadas; volver a enviar la conversación sí).
+- **Comprobación previa:** inventario de archivos por prefijo y antigüedad (solo lectura).
+- **Impacto:** Copilot Studio y Search, ninguno. Web app: imágenes antiguas dejan de estar disponibles para el modelo en conversaciones viejas.
+- **Rollback:** no aplica (borrado). Empezar con un periodo de retención amplio.
