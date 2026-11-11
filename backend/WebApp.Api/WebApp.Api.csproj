@@ -26,4 +26,8 @@
     <ProjectReference Include="..\WebApp.ServiceDefaults\WebApp.ServiceDefaults.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="WebApp.Api.Tests" />
+  </ItemGroup>
+
 </Project>
