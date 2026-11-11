@@ -19,7 +19,7 @@ Azure AI Foundry Agent Service sample app — Entra ID auth, SSE streaming, Cont
 - **OBO admin consent** — `AIProjectClient` scope `https://ai.azure.com/.default` resolves to **Azure Machine Learning Services** (appId `18a66f5f-...`). Admin consent must target this service principal.
 - **OBO scope** — `OnBehalfOfCredential` authenticates Agent Service API calls. Agent tools (MCP, OpenAPI, Logic Apps) use the agent's own identity from Foundry portal.
 - **User-assigned MI** — Created in the infrastructure module; used for ACR pull (`AcrPull` role) and reused for OBO FIC when enabled.
-- **`.npmrc`** — Configures `--legacy-peer-deps` for React 19 peer-dep resolution. Run `npm install` from `frontend/` directory.
+- **npm** — Run `npm install` (or `npm ci`) from the `frontend/` directory. Peer dependencies resolve without `--legacy-peer-deps`.
 - **Observability** — Separate Application Insights resources for backend (OpenTelemetry via `Azure.Monitor.OpenTelemetry.AspNetCore`) and frontend (`@microsoft/applicationinsights-web`), sharing one Log Analytics workspace. Backend connection string is an env var; frontend connection string is injected at Docker build time via `VITE_APPLICATIONINSIGHTS_CONNECTION_STRING`.
 
 ## Deployment (Non-Obvious)

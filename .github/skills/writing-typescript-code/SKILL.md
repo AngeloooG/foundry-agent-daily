@@ -142,11 +142,9 @@ if (!response.ok) throw new Error(`API error: ${response.status}`);
 
 ## npm Dependencies
 
-`frontend/.npmrc` sets `legacy-peer-deps=true` automatically — no flag needed when running from `frontend/`.
+Peer dependencies resolve cleanly; do **not** add `legacy-peer-deps` (it hides real incompatibilities). If `npm install` reports `ERESOLVE`, fix the version conflict instead of bypassing it.
 
-**Gotcha**: `legacy-peer-deps` skips automatic peer dependency installation. If a package requires peer deps, add them explicitly to `package.json`.
 
-**Example**: `@lexical/yjs` requires `yjs` as a peer dependency. Since peer deps aren't auto-installed, `yjs` must be in `package.json` directly.
 
 **Before committing package changes**, verify with:
 ```bash
@@ -159,7 +157,7 @@ npm ci  # Fails if lock file is out of sync with package.json
 - ❌ Calling hooks conditionally or in loops
 - ❌ Using `any` type
 - ❌ Storing tokens in component state
-- ❌ Running `npm install` outside `frontend/` (misses `.npmrc` config)
+- ❌ Running `npm install` outside `frontend/`
 - ❌ Missing memoization in custom hooks (causes infinite re-renders)
 - ❌ Returning new objects from hooks without `useMemo`
 
