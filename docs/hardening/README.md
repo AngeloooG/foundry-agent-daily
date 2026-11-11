@@ -1,6 +1,8 @@
 # Daily Enhanced: endurecimiento de seguridad (lotes 0–7)
 
-Rama `hardening/daily-security` → `Develop-Daily`. **Borrador: no fusionar sin revisión senior.** Toca autenticación, autorización, cabeceras de seguridad, RBAC y red.
+Rama `hardening/daily-security` → `Develop-Daily`. **Borrador: no fusionar sin revisión senior.** Toca autenticación, autorización y cabeceras de seguridad. No cambia RBAC ni red: esos cambios están documentados como acciones para el equipo.
+
+> **Arquitectura objetivo vigente: `internal-minimal`** (aprobada el 2026-11-11; ver [lote-7-simplificado.md](lote-7-simplificado.md)): reutiliza los recursos existentes y requiere **0 recursos nuevos obligatorios**. Clasificación de cada recomendación: **CURRENT** (funciona hoy), **RECOMMENDED NOW** (apropiado para Daily interno), **FUTURE** (arquitectura avanzada que no se despliega ahora), **LEGACY - DO NOT DEPLOY** (diseño de 45 recursos descartado) y **CLOSED** (hallazgo cerrado). Clasificación final en [lote-7-simplificado.md](lote-7-simplificado.md), sección 23.
 
 ## Resumen
 
@@ -15,7 +17,7 @@ Rama `hardening/daily-security` → `Develop-Daily`. **Borrador: no fusionar sin
   - Telemetría sin conversaciones.
 - **Streaming:** reintentos idempotentes, solo antes del primer chunk y solo ante fallos transitorios. Un stream sin `done` termina en error, la interfaz nunca se queda en "respondiendo", el texto del usuario se restaura y la cancelación no se muestra como error.
 - **Dependencias:** 10 vulnerabilidades altas o críticas corregidas con parches o versiones menores. En runtime, `npm audit` queda en 0.
-- **Infraestructura:** Bicep modular de la plataforma compartida (dev y prod), validado con `what-if` sin cambios en lo existente, más el diseño de red privada y la matriz RBAC. **Nada desplegado.**
+- **Infraestructura:** perfil `internal-minimal` aprobado. Reutiliza la Container App, Foundry, Search, SQL, el ACR, Application Insights y Log Analytics existentes, con 0 recursos nuevos obligatorios. El diseño anterior de red privada (45 recursos) queda como LEGACY / FUTURE. La nueva versión de Bicep está pendiente de aprobación. **Nada desplegado.**
 
 ## Aviso a los usuarios antes del despliegue
 
@@ -35,7 +37,7 @@ Rama `hardening/daily-security` → `Develop-Daily`. **Borrador: no fusionar sin
 | 4 | MSAL (cuenta activa, respaldo `acquireTokenRedirect`, `/redirect.html` opcional desactivado), `SafeMarkdown`, validación de adjuntos traducible, telemetría sin contenido; 44 archivos de interfaz inalcanzables y 9 dependencias sin uso eliminados; sin `legacy-peer-deps` | [lote-4.md](lote-4.md) |
 | 5 | Política de reintentos idempotente, recuperación por ids de mensaje, `ChatServiceProvider` (una instancia por sesión, cancelación al desmontar) | [lote-5.md](lote-5.md) |
 | 6 | Análisis (sin cambios en Azure): cargo y área desde Office 365 Users; indexación incremental con `rowversion`; borrado lógico; ejecución a demanda más una programación diaria; vectorizador verificado; Copilot Studio con clave de consulta dedicada. El procedimiento de ingesta queda **bloqueado** hasta que exista `docs/sql/` | [lote-6.md](lote-6.md) |
-| 7 | `infra/platform/` (10 módulos y 2 bicepparam), what-if de dev y prod, [red-privada.md](red-privada.md) y [matriz-rbac.md](matriz-rbac.md) | [lote-7.md](lote-7.md) |
+| 7 | **Vigente:** perfil `internal-minimal`, [matriz-rbac.md](matriz-rbac.md), verificación V1 (Foundry → Search) y procedimiento de A10. **Legacy:** `infra/platform/`, el what-if del diseño de 45 recursos ([whatif/](whatif/README.md)) y [lote-7.md](lote-7.md). **Future:** [red-privada.md](red-privada.md) | [lote-7-simplificado.md](lote-7-simplificado.md) |
 
 ## Tests
 
@@ -84,26 +86,27 @@ Rollback: reactivar la revisión anterior de la Container App. Los datos no camb
 
 Detalle con comandos, comprobación previa, impacto y rollback en [acciones-azure.md](acciones-azure.md).
 
-| Acción | Tema | Revisión senior |
-|---|---|---|
-| A1 | Conexión Foundry → Search con Entra en lugar de clave | Sí |
-| A2 | Reconstruir la imagen (runtime de .NET corregido) | — |
-| A3 | Retención de imágenes subidas | — |
-| A4 | Redirect URI para la renovación silenciosa de MSAL (opcional) | Sí |
-| A5 | Búsqueda híbrida semántica en el agente (hoy `query_type: simple`) | — |
-| A6 | Copilot Studio: clave de consulta dedicada `daily-copilot-studio` y fuente duplicada | Sí |
-| A7 | Indexador a demanda desde el flujo más programación diaria | — |
-| A8 | Indexación incremental y borrado lógico en la vista | Sí |
-| A9 | Cuota de `gpt-5.1` en centralus | — |
-| A10 | Foundry User para la identidad de la web app (sin retirar nada hasta probar) | Sí |
-| A11 | Migración a red privada | Sí |
-| A12 | Firewall de `knowledgeserver` (`AllowAllWindowsAzureIps`) | Sí |
-| A13 | Asignaciones privilegiadas fuera de Daily (UAA en `/`, principal de servicio con Contributor y UAA) | Sí |
+| Acción | Tema | Clasificación | Revisión senior |
+|---|---|---|---|
+| A1 | Foundry ApiKey → identidad administrada / Entra ID (V1: hoy usa clave; tarea independiente, no implementada) | RECOMMENDED NOW | Sí |
+| A2 | Reconstruir la imagen (runtime de .NET corregido) | RECOMMENDED NOW | — |
+| A3 | Retención de imágenes subidas | RECOMMENDED NOW | — |
+| A4 | Redirect URI para la renovación silenciosa de MSAL | RECOMMENDED NOW, opcional | Sí |
+| A5 | Búsqueda híbrida en el agente (hoy `query_type: simple`) | RECOMMENDED NOW, sin semántico mientras Search sea Free | — |
+| A6 | Copilot Studio: clave de consulta dedicada `daily-copilot-studio` y fuente duplicada | RECOMMENDED NOW, si hoy usa una clave de administración (verificar antes) | Sí |
+| A7 | Indexador a demanda desde el flujo más programación diaria | RECOMMENDED NOW | — |
+| A8 | Indexación incremental y borrado lógico en la vista | FUTURE | Sí |
+| A9 | Cuota de `gpt-5.1` en centralus | CLOSED / LEGACY INFRASTRUCTURE FINDING | — |
+| A10 | Mínimo privilegio de la identidad web: retirada secuencial de 2 roles (tarea posterior) | RECOMMENDED NOW | Sí |
+| A11 | Migración a red privada | FUTURE – ROADMAP / ADVANCED HARDENING | Sí |
+| A12 | Firewall de `knowledgeserver` (`AllowAllWindowsAzureIps`) | FUTURE – Future infrastructure hardening | Sí |
+| A13 | Asignaciones administrativas excesivas o desconocidas | Hallazgo de gobierno externo (escalar a CONSEIN) | Sí |
 
 ## Pendientes conocidos
 
 - `docs/sql/`: exportar el procedimiento de ingesta y la vista para cerrar el análisis del lote 6.
-- `infra/main.bicep` (IaC de `azd` de la web app) sigue desalineado con lo desplegado; se reconcilia con la fase F2 de la red privada.
+- `infra/main.bicep` (IaC de `azd` de la web app) sigue desalineado con lo desplegado; se reconciliará en la nueva versión de Bicep `internal-minimal` (pendiente de aprobación).
+- Search Free es el entorno actual de desarrollo y pruebas. Su identidad saliente funciona, pero no está documentada para ese nivel: no es base para producción. Para una futura producción interna se recomienda Basic (FUTURE).
 - Desactivar la autenticación local en Search, Foundry o Application Insights **solo** después de un inventario que demuestre que ningún consumidor usa claves (hoy, Copilot Studio y la conexión de Foundry usan claves de Search). El componente de Application Insights del navegador mantiene la autenticación local.
 - Mensajes de error genéricos del frontend en inglés (i18n).
 - Fijar las acciones de GitHub por SHA.

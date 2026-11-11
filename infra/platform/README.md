@@ -1,5 +1,12 @@
 # Plataforma compartida de Daily (Bicep)
 
+> **LEGACY DESIGN - DO NOT DEPLOY.**
+> This template belongs to the previous private-network architecture.
+> It is retained only for historical and architectural reference.
+> The current target architecture is internal-minimal ([`docs/hardening/lote-7-simplificado.md`](../../docs/hardening/lote-7-simplificado.md)).
+>
+> Los archivos `.bicep` y `.bicepparam` de esta carpeta no se han modificado. Se sustituirán por la plantilla `internal-minimal` cuando se apruebe la nueva versión de Bicep. **No desplegar ni ejecutar what-if con ellos.**
+
 Infraestructura como código de los componentes **compartidos** de Daily: Azure AI Search, Azure SQL, Microsoft Foundry (cuenta, proyecto, despliegues y conexión a Search), Key Vault, identidades, monitorización y alertas, y la red privada opcional.
 
 La web app (Container App, ACR, registro de Entra) sigue en [`infra/main.bicep`](../main.bicep) con `azd`. Esta plataforma **no** forma parte de `azd`, así que `azd provision` y `azd down` no la tocan.

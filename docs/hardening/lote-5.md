@@ -1,5 +1,7 @@
 # Lote 5 – Streaming y reintentos
 
+> **Clasificación: CURRENT.** Registro del streaming y los reintentos (implementado en la rama; se despliega con A2).
+
 ## 1. Objetivo
 
 Que un fallo de red o del agente nunca duplique mensajes ni conversaciones, que la interfaz nunca se quede en "respondiendo", que el usuario no pierda lo que escribió y que "Detener" funcione siempre.

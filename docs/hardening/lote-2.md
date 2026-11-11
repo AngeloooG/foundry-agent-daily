@@ -1,5 +1,7 @@
 # Lote 2 – Propiedad y autorización por recurso
 
+> **Clasificación: CURRENT.** Registro de la propiedad y la autorización por recurso (implementado en la rama; se despliega con A2).
+
 ## 1. Objetivo
 
 Que cada usuario del inquilino CONSEIN acceda solo a sus propias conversaciones, mensajes, streams, aprobaciones MCP y archivos, con respuesta **404** si no es el dueño, y que todo endpoint quede protegido por defecto.
