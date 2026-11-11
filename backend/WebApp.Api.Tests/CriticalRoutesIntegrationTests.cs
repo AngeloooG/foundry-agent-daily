@@ -299,7 +299,6 @@ public sealed class CriticalRoutesIntegrationTests
     // ===================== Lote 3: backend security (target behavior) =====================
 
     [TestMethod]
-    [Ignore("Lote 3: /api/agent sin Instructions ni metadata interna")]
     public async Task AgentMetadata_DoesNotExposeInstructionsOrInternalMetadata()
     {
         var body = await _factory.CreateUserClient(UserA).GetStringAsync("/api/agent");
@@ -309,7 +308,6 @@ public sealed class CriticalRoutesIntegrationTests
     }
 
     [TestMethod]
-    [Ignore("Lote 3: validación previa (400) sin crear conversación ni subir archivos")]
     public async Task InvalidAttachment_Returns400_WithoutSideEffects()
     {
         var (response, events) = await _factory.CreateUserClient(UserA).PostChatAsync(new
@@ -324,10 +322,18 @@ public sealed class CriticalRoutesIntegrationTests
     }
 
     [TestMethod]
-    [Ignore("Lote 3: cabeceras de seguridad y CSP compatible con MSAL")]
     public async Task Responses_CarrySecurityHeaders()
     {
-        var response = await _factory.CreateClient().GetAsync("/api/health");
+        // As behind the Container Apps ingress: TLS terminated upstream and signalled with
+        // X-Forwarded-Proto; non-localhost host (UseHsts excludes localhost by design).
+        var client = _factory.CreateClient(new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("http://daily.example.test")
+        });
+        var request = new HttpRequestMessage(HttpMethod.Get, "/api/health");
+        request.Headers.Add("X-Forwarded-Proto", "https");
+
+        var response = await client.SendAsync(request);
         var csp = response.Headers.GetValues("Content-Security-Policy").Single();
 
         Assert.AreEqual("nosniff", response.Headers.GetValues("X-Content-Type-Options").Single());

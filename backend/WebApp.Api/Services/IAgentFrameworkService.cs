@@ -11,12 +11,15 @@ namespace WebApp.Api.Services;
 /// </remarks>
 public interface IAgentFrameworkService
 {
+    /// <summary>
+    /// Streams the agent response. <paramref name="attachments"/> must already be validated
+    /// (<see cref="AttachmentProcessor"/>); with <paramref name="mcpApproval"/> the call resumes a
+    /// pending MCP tool call instead of sending a user message.
+    /// </summary>
     IAsyncEnumerable<StreamChunk> StreamMessageAsync(
         string conversationId,
         string message,
-        List<string>? imageDataUris = null,
-        List<FileAttachment>? fileDataUris = null,
-        string? previousResponseId = null,
+        PreparedAttachments attachments,
         McpApprovalResponse? mcpApproval = null,
         CancellationToken cancellationToken = default);
 

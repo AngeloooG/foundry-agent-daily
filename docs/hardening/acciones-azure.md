@@ -35,3 +35,14 @@ Convenciones: suscripción `b6d04525-e7b4-4b17-8492-2471f9779962`, grupo `rg-dai
 - **Comprobación previa:** inventario de archivos por prefijo y antigüedad (solo lectura).
 - **Impacto:** Copilot Studio y Search, ninguno. Web app: imágenes antiguas dejan de estar disponibles para el modelo en conversaciones viejas.
 - **Rollback:** no aplica (borrado). Empezar con un periodo de retención amplio.
+
+## A4. (Opcional) Redirect URI para la renovación silenciosa de MSAL
+
+**Requiere revisión senior** (cambio en Entra ID).
+
+- **Objetivo:** con `frame-ancestors 'none'` la renovación silenciosa por iframe de MSAL falla y el frontend cae a una redirección de página completa (aprox. una vez al día por usuario, cuando caduca el refresh token). Para evitarlo se puede usar una página en blanco (`/redirect.html`) como redirect URI de las llamadas silenciosas, servida con `frame-ancestors 'self'` solo en esa ruta.
+- **Cambio:** añadir la redirect URI de tipo SPA `https://<url-de-la-container-app>/redirect.html` (y `http://localhost:5173/redirect.html` en desarrollo) al registro `ai-foundry-agent-env-DailyEnhanced` (appId `b1d2995c-…`). Después, activar `SecurityHeaders__SilentRedirectPageEnabled=true` en la Container App y `VITE_MSAL_SILENT_REDIRECT_ENABLED=true` en el build del frontend.
+- **Comprobación previa (solo lectura):** `az ad app show --id b1d2995c-345d-49f1-bbbc-164f029120cb --query spa.redirectUris` (comando de lectura; la configuración local de Claude Code lo tiene bloqueado, ejecútalo el equipo).
+- **Prueba:** procedimiento de `verificacion-manual.md`, caso "renovación silenciosa".
+- **Impacto:** Copilot Studio, Search y Foundry, ninguno.
+- **Rollback:** desactivar las dos variables (la redirect URI extra puede quedar registrada sin efecto).

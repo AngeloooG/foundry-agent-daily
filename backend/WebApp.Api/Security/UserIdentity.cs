@@ -46,6 +46,9 @@ public static class UserIdentity
         return ComputeOwnerKey(tenantId, objectId);
     }
 
+    /// <summary>First 16 hex chars of the owner key, for log correlation (never the raw oid).</summary>
+    public static string? GetLogKey(ClaimsPrincipal? user) => GetOwnerKey(user)?[..16];
+
     public static string ComputeOwnerKey(string tenantId, string objectId) =>
         Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes($"{tenantId}:{objectId}")));
 

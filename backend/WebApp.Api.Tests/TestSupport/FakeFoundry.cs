@@ -32,20 +32,26 @@ public sealed class FakeFoundry : IAgentFrameworkService, IConversationOwnership
     public void SeedLegacyConversation(string id, string title) =>
         _conversations[id] = new Dictionary<string, string> { [ConversationMetadata.TitleKey] = title };
 
+    public PreparedAttachments? LastAttachments;
+    public Exception? FailAfterFirstChunk { get; set; }
+
     public async IAsyncEnumerable<StreamChunk> StreamMessageAsync(
         string conversationId,
         string message,
-        List<string>? imageDataUris = null,
-        List<FileAttachment>? fileDataUris = null,
-        string? previousResponseId = null,
+        PreparedAttachments attachments,
         McpApprovalResponse? mcpApproval = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         Interlocked.Increment(ref StreamCalls);
         LastStreamConversationId = conversationId;
         LastApproval = mcpApproval;
+        LastAttachments = attachments;
 
         yield return StreamChunk.Text("Hola");
+        if (FailAfterFirstChunk is not null)
+        {
+            throw FailAfterFirstChunk;
+        }
         yield return StreamChunk.Text(" mundo");
         yield return StreamChunk.WithAnnotations([new AnnotationInfo { Type = "file_citation", Label = "Caso", FileId = CitedFileId }]);
         await Task.CompletedTask;
@@ -86,8 +92,8 @@ public sealed class FakeFoundry : IAgentFrameworkService, IConversationOwnership
             CreatedAt = 1,
             Name = "Daily",
             Model = "gpt-test",
-            Instructions = "SYSTEM PROMPT (must not be exposed)",
-            Metadata = new Dictionary<string, string> { ["logo"] = "daily.svg", ["internal"] = "x" },
+            // Same filtering as AgentFrameworkService (instructions are no longer part of the DTO).
+            Metadata = AgentFrameworkService.FilterPublicMetadata(new Dictionary<string, string> { ["logo"] = "daily.svg", ["internal"] = "x" }),
             StarterPrompts = ["Hola"]
         });
 
