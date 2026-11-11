@@ -48,12 +48,42 @@ Pruebas manuales ejecutadas por el usuario en el navegador, con Entra real.
 | 1 Inicio de sesión | OK | |
 | 2 `/api/agent` autenticado | **PASS** (200) | |
 | 3 Envío de mensajes | OK, con un evento aislado (ver abajo) | |
-| 9 Telemetría | **Fallo de CSP**: `connect-src` bloqueó `https://js.monitor.azure.com/scripts/b/ai.config.1.cfg.json` | El SDK de Application Insights descarga su configuración dinámica de ese origen. Se corrige en código añadiendo exactamente `https://js.monitor.azure.com` a `connect-src` (sin comodines; `script-src` no cambia). Pendiente de verificar en una imagen nueva. |
+| 9 Telemetría | **Fallo de CSP**: `connect-src` bloqueó `https://js.monitor.azure.com/scripts/b/ai.config.1.cfg.json` | El SDK de Application Insights descarga su configuración dinámica de ese origen. Se corrige en código añadiendo exactamente `https://js.monitor.azure.com` a `connect-src` (sin comodines; `script-src` no cambia). Corregido en `57a36af` y verificado en `--h57a36af` (ver abajo). |
 | Aviso `unload` en consola | Informativo, sin cambios | La app **no** envía `unload` en `Permissions-Policy` (cabecera actual: `camera=(), microphone=(), geolocation=(), payment=()`). El aviso lo genera el propio navegador por la retirada del evento `unload`. Se mantiene la política actual. |
 
 **Evento aislado de respuesta de respaldo (*fallback*).** En una consulta por el nombre de una especialista presente en el índice, el agente devolvió una vez la respuesta de respaldo ("no encontré información"). Al repetir la misma consulta 5 veces, las **5 respondieron correctamente** con datos del índice.
 
-- Clasificación: evento aislado, no reproducible. **No bloquea el merge** salvo que se reproduzca.
+- Clasificación: **ISOLATED / NOT REPRODUCED** (5/5 consultas posteriores correctas). **No bloquea el merge**. Si se reproduce, se abrirá como incidencia separada.
 - Sin cambios en Foundry (agente, versión ni instrucciones), en la conexión `azureairesourceprueba2`, en Search (índice, vectorizador, configuración semántica), en claves ni en Copilot Studio.
 - Si se reproduce: anotar fecha y hora (UTC), revisión activa y el `operation_Id` de Application Insights, **sin** copiar el contenido de la conversación, y revisar el resultado de la herramienta de búsqueda en la traza de Foundry antes de tocar ninguna configuración.
 - El nombre de la persona se omite a propósito en este registro (no se guardan identificadores personales sin seudonimizar).
+
+### 2026-11-11 · Validación final · revisión `ca-web-blx2jbksxc7iu--h57a36af`
+
+Resultado: **PASS** (validación funcional). Estado del hardening: **GO FOR REVIEW**.
+
+- Revisión validada: `ca-web-blx2jbksxc7iu--h57a36af` (Single revision mode, 100 % del tráfico, Healthy, `restartCount` 0).
+- Imagen validada: `crblx2jbksxc7iu.azurecr.io/web@sha256:9a8ea7283c0735fcd7d7b1574471f238888ed62747786e186994812dc3db6a17` (tag `web:sha-57a36afab528`, ejecución ACR `cj8`, linux/amd64).
+- Commit: `57a36afab528c6c317e4869c30b4e8952c505f28` (corrección de CSP).
+- CI: verde sobre `57a36af` (ejecución 43080388975). Frontend: lint, TypeScript, 248/248 tests y build. Backend: build y 153/153 tests. Transporte Base64: correcto.
+- Configuración de la Container App sin cambios aparte de la imagen: las huellas de variables y de la configuración no secreta coinciden con la línea base.
+- Comprobaciones automáticas (solo lectura): `/api/health`, `/health`, `/alive` y SPA → 200; `/api/agent` sin token → 401; cabeceras de seguridad presentes; arranque sin excepciones; sin 5xx ni errores de Foundry.
+- Pruebas manuales ejecutadas por el usuario en el navegador, con Entra real.
+- Ninguna de estas comprobaciones requirió rollback.
+
+| Caso | Resultado | Nota |
+|---|---|---|
+| 1 Inicio de sesión con Microsoft Entra ID | **PASS** | Navegación a `/home` y `/daily` correcta. |
+| 2 `/api/agent` autenticado | **PASS** | |
+| 3 Envío de mensajes y streaming | **PASS** | El texto completo de la respuesta se conserva. |
+| Recuperación desde Azure AI Search | **PASS** | 5/5 consultas adicionales correctas. |
+| Cancelación del stream | **PASS** | |
+| 6 Pestaña nueva (`sessionStorage`) | **PASS** | |
+| Adjuntos | **PASS** | |
+| CSP | **PASS** | `connect-src` publicado: `'self' https://login.microsoftonline.com https://js.monitor.azure.com https://centralus-2.in.applicationinsights.azure.com https://centralus.livediagnostics.monitor.azure.com`. Sin comodines; `Permissions-Policy` y `frame-ancestors 'none'` sin cambios. Ya no aparece la violación anterior. |
+| Configuración dinámica de Application Insights | **PASS** | `GET https://js.monitor.azure.com/scripts/b/ai.config.1.cfg.json` → **200 OK**. |
+| 9 Telemetría del frontend | **PASS** | Las peticiones `track` responden correctamente. |
+| Aviso `unload` en consola | Informativo, **no bloquea** | Lo genera el navegador; `Permissions-Policy` no se modifica. |
+| Propiedad con dos usuarios reales del inquilino | **PENDING REAL-TENANT VALIDATION** | No es un fallo. Se cubre hoy con los tests de integración, en los que el usuario B recibe 404 sobre los recursos del usuario A. Falta repetirlo en el navegador con dos cuentas reales del inquilino. |
+
+Incidente inicial de recuperación (revisión `--heb3666a`): **ISOLATED / NOT REPRODUCED**. Las 5 consultas posteriores fueron correctas.

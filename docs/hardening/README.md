@@ -60,6 +60,12 @@ Casos de integración destacados:
 
 La verificación con Entra real (CSP con MSAL, `acquireTokenSilent`, redirección, pestaña nueva) es manual: [verificacion-manual.md](verificacion-manual.md).
 
+**Estado de validación (2026-11-11):**
+
+- Validación funcional **PASS** en la revisión `ca-web-blx2jbksxc7iu--h57a36af`, imagen `web@sha256:9a8ea728…6a17`, commit `57a36af`, con la CI en verde.
+- Hardening: **GO FOR REVIEW**.
+- Pendiente: la propiedad con dos usuarios reales del inquilino (**PENDING REAL-TENANT VALIDATION**).
+
 ## Configuración nueva
 
 | Clave | Por defecto | Uso |
