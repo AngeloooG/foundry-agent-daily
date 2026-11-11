@@ -77,3 +77,33 @@ describe('DailyChatInterface (lote 4)', () => {
     expect(onSendMessage).toHaveBeenCalledWith('resume', [pdf]);
   });
 });
+
+describe('DailyChatInterface recovery (lote 5)', () => {
+  beforeAll(() => {
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
+  afterEach(cleanup);
+
+  it('restores the text and the attachments when a send fails', () => {
+    const onSendMessage = vi.fn();
+    const pdf = new File(['%PDF-1.7'], 'caso.pdf', { type: 'application/pdf' });
+    const { container, rerender } = render(
+      <DailyChatInterface t={t} messages={[]} status="idle" error={null} onSendMessage={onSendMessage} />
+    );
+
+    selectFiles(container, [pdf]);
+    fireEvent.change(screen.getByLabelText(t.chat.placeholder), { target: { value: 'resume el caso' } });
+    fireEvent.click(screen.getByText(t.chat.actions.send));
+    expect((screen.getByLabelText(t.chat.placeholder) as HTMLTextAreaElement).value).toBe('');
+
+    // The service reports the failure through state (CHAT_RECOVER_MESSAGE -> recoveredInput).
+    rerender(
+      <DailyChatInterface t={t} messages={[]} status="error" error={null} recoveredInput="resume el caso"
+        onSendMessage={onSendMessage} onRecoveredInputConsumed={vi.fn()} />
+    );
+
+    expect((screen.getByLabelText(t.chat.placeholder) as HTMLTextAreaElement).value).toBe('resume el caso');
+    expect(screen.getByText(/caso\.pdf/)).toBeTruthy();
+  });
+});

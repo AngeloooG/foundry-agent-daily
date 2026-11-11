@@ -88,7 +88,7 @@ describe('ChatService.sendMessage (critical path)', () => {
 
   // ---------- Lote 5: retries and streaming (target behavior) ----------
 
-  it.skip('Lote 5: does not retry 4xx responses and restores the input', async () => {
+  it('Lote 5: does not retry 4xx responses and restores the input', async () => {
     const fetchMock = vi.fn().mockResolvedValue(problemResponse(400, 'File 1 (a.pdf): too big.'));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -98,7 +98,7 @@ describe('ChatService.sendMessage (critical path)', () => {
     expect(find('CHAT_RECOVER_MESSAGE')?.messageText).toBe('mira esto');
   });
 
-  it.skip('Lote 5: does not retry after the first chunk or an SSE error event', async () => {
+  it('Lote 5: does not retry after the first chunk or an SSE error event', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       sseResponse([
         { type: 'conversationId', conversationId: 'conv_new' },
@@ -114,7 +114,7 @@ describe('ChatService.sendMessage (critical path)', () => {
     expect(find('CHAT_RECOVER_MESSAGE')?.messageText).toBe('hola');
   });
 
-  it.skip('Lote 5: a stream that ends without "done" releases the UI and restores the input', async () => {
+  it('Lote 5: a stream that ends without "done" releases the UI and restores the input', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
       sseResponse([{ type: 'conversationId', conversationId: 'conv_1' }, { type: 'chunk', content: 'x' }], { endWithoutDone: true })
     ));
@@ -124,7 +124,7 @@ describe('ChatService.sendMessage (critical path)', () => {
     expect(find('CHAT_RECOVER_MESSAGE')?.messageText).toBe('hola');
   });
 
-  it.skip('Lote 5: retries a transient failure before the first chunk reusing the conversation id', async () => {
+  it('Lote 5: retries a transient failure before the first chunk reusing the conversation id', async () => {
     vi.useFakeTimers();
     const fetchMock = vi
       .fn()
@@ -141,7 +141,7 @@ describe('ChatService.sendMessage (critical path)', () => {
     expect(bodies.every((b) => b.conversationId === 'conv_1')).toBe(true);
   });
 
-  it.skip('Lote 5: cancelling does not report an error nor duplicate messages', async () => {
+  it('Lote 5: cancelling does not report an error nor duplicate messages', async () => {
     const fetchMock = vi.fn().mockImplementation((_url: string, init: RequestInit) =>
       new Promise((_resolve, reject) => {
         init.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));

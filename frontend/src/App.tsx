@@ -4,6 +4,7 @@ import { useAppState } from './hooks/useAppState';
 import { InteractionRequiredAuthError, InteractionType } from "@azure/msal-browser";
 import { ErrorBoundary } from "./components/core/ErrorBoundary";
 import { DailyShell } from "./components/daily/DailyShell";
+import { ChatServiceProvider } from "./contexts/ChatServiceContext";
 import { loginRequest } from "./config/authConfig";
 import { useState, useEffect, useCallback } from "react";
 import { useAuth } from "./hooks/useAuth";
@@ -87,8 +88,11 @@ function App() {
         <>
           <AuthenticatedTemplate>
             {agentMetadata && (
-              <div className="app-container">  
-                <DailyShell agentMetadata={agentMetadata} />
+              <div className="app-container">
+                {/* One ChatService per signed-in session: streams survive navigation and are cancelled when the session ends. */}
+                <ChatServiceProvider>
+                  <DailyShell agentMetadata={agentMetadata} />
+                </ChatServiceProvider>
               </div>
             )}
           </AuthenticatedTemplate>

@@ -56,6 +56,12 @@ export function getErrorCodeFromResponse(response: Response): ErrorCode {
   if (response.status === 401 || response.status === 403) {
     return 'AUTH';
   }
+  if (response.status === 400 || response.status === 413 || response.status === 422) {
+    return 'VALIDATION';
+  }
+  if (response.status === 429) {
+    return 'RATE_LIMIT';
+  }
   if (response.status >= 500) {
     return 'SERVER'; // Server-side error
   }
@@ -175,18 +181,50 @@ export async function retryWithBackoff<T>(
 }
 
 /**
+ * Build an AppError from a non-OK HTTP response.
+ *
+ * For VALIDATION (400/413) the server's ProblemDetails `detail` is shown to the user: it describes
+ * the user's own input (e.g. which attachment was rejected and why), so it is safe and actionable.
+ * Other codes keep the generic, user-friendly message.
+ *
+ * @param response - Failed fetch response
+ * @returns AppError with `status` set
+ */
+export async function createAppErrorFromResponse(response: Response): Promise<AppError> {
+  const code = getErrorCodeFromResponse(response);
+  const detail = await parseErrorFromResponse(response);
+  const appError = createAppError(new Error(`HTTP ${response.status}`), code);
+  appError.status = response.status;
+
+  if (code === 'VALIDATION' && detail) {
+    appError.message = detail;
+  }
+  if (code === 'RATE_LIMIT') {
+    const retryAfter = response.headers.get('Retry-After');
+    if (retryAfter) {
+      appError.message = `${appError.message} (${retryAfter}s)`;
+    }
+  }
+
+  return appError;
+}
+
+/**
  * Convert any thrown value into an Error suitable for telemetry, without user content.
- * AppErrors are plain objects; `new Error(String(e))` produced "[object Object]".
+ * AppErrors are plain objects; passing them to `new Error(String(e))` produced "[object Object]".
  */
 export function toTelemetryError(error: unknown): Error {
   if (error instanceof Error) {
     return error;
   }
-  if (error !== null && typeof error === 'object' && 'code' in error && 'recoverable' in error) {
-    const code = String((error as { code: unknown }).code);
-    const telemetryError = new Error(`AppError ${code}`);
-    telemetryError.name = `AppError.${code}`;
+  if (isAppErrorLike(error)) {
+    const telemetryError = new Error(`AppError ${error.code}${error.status ? ` (HTTP ${error.status})` : ''}`);
+    telemetryError.name = `AppError.${error.code}`;
     return telemetryError;
   }
   return new Error('Non-error value thrown');
+}
+
+function isAppErrorLike(error: unknown): error is AppError {
+  return error !== null && typeof error === 'object' && 'code' in error && 'recoverable' in error;
 }

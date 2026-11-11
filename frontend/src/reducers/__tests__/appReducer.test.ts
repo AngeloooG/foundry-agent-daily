@@ -844,7 +844,7 @@ describe('appReducer', () => {
       expect(result.chat.streamingMessageId).toBeUndefined();
     });
 
-    it('uses singular "attempt" for retryCount of 1', () => {
+    it('shows the original error reason when there was a single attempt', () => {
       const state = createInitialState();
       state.chat.messages = [
         createMockMessage({ id: 'user-1', role: 'user' }),
@@ -854,12 +854,52 @@ describe('appReducer', () => {
       const result = appReducer(state, {
         type: 'CHAT_RECOVER_MESSAGE',
         messageText: 'test',
-        error: { code: 'AUTH', message: 'Unauthorized', recoverable: false },
+        error: { code: 'VALIDATION', message: 'File 1 (a.pdf): too big.', recoverable: true },
         retryCount: 1,
       });
 
-      expect(result.chat.error?.message).toContain('1 attempt');
-      expect(result.chat.error?.message).not.toContain('1 attempts');
+      expect(result.chat.error?.message).toBe('File 1 (a.pdf): too big. Your message has been restored.');
+      expect(result.chat.error?.message).not.toContain('attempt');
+    });
+
+    it('removes only the listed messages when messageIds is provided', () => {
+      const state = createInitialState();
+      state.chat.messages = [
+        createMockMessage({ id: 'old-1', role: 'user' }),
+        createMockMessage({ id: 'user-1', role: 'user' }),
+        createMockMessage({ id: 'approval-1', role: 'approval' }),
+        createMockMessage({ id: 'assistant-1', role: 'assistant' }),
+      ];
+
+      const result = appReducer(state, {
+        type: 'CHAT_RECOVER_MESSAGE',
+        messageText: 'test',
+        error: { code: 'STREAM', message: 'Interrupted', recoverable: true },
+        retryCount: 1,
+        messageIds: ['user-1', 'assistant-1'],
+      });
+
+      expect(result.chat.messages.map(m => m.id)).toEqual(['old-1', 'approval-1']);
+      expect(result.chat.recoveredInput).toBe('test');
+    });
+
+    it('keeps all messages when the send failed before they were added', () => {
+      const state = createInitialState();
+      state.chat.messages = [
+        createMockMessage({ id: 'old-1', role: 'user' }),
+        createMockMessage({ id: 'old-2', role: 'assistant' }),
+      ];
+
+      const result = appReducer(state, {
+        type: 'CHAT_RECOVER_MESSAGE',
+        messageText: 'not sent',
+        error: { code: 'AUTH', message: 'Unauthorized', recoverable: false },
+        retryCount: 1,
+        messageIds: [],
+      });
+
+      expect(result.chat.messages).toHaveLength(2);
+      expect(result.chat.recoveredInput).toBe('not sent');
     });
 
     it('handles empty message array gracefully', () => {
