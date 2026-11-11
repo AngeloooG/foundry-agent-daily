@@ -152,9 +152,17 @@ public sealed class BackendHardeningTests
         });
 
         var csp = (await factory.CreateClient().GetAsync("/api/health")).Headers.GetValues("Content-Security-Policy").Single();
+        var connectSrc = csp.Split(';', StringSplitOptions.TrimEntries).Single(d => d.StartsWith("connect-src ", StringComparison.Ordinal))
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries).Skip(1).ToArray();
 
-        StringAssert.Contains(csp, "https://centralus-2.in.applicationinsights.azure.com");
-        StringAssert.Contains(csp, "https://centralus.livediagnostics.monitor.azure.com");
+        CollectionAssert.AreEquivalent(
+            new[]
+            {
+                "'self'", "https://login.microsoftonline.com", "https://js.monitor.azure.com",
+                "https://centralus-2.in.applicationinsights.azure.com", "https://centralus.livediagnostics.monitor.azure.com"
+            },
+            connectSrc);
+        Assert.IsFalse(csp.Contains('*'), "No wildcard sources anywhere in the CSP.");
     }
 }
 
@@ -170,12 +178,14 @@ public sealed class ContentSecurityPolicyBuilderTests
         {
             "default-src 'self'", "base-uri 'self'", "object-src 'none'", "frame-ancestors 'none'",
             "script-src 'self'", "img-src 'self' data: blob:", "frame-src https://login.microsoftonline.com",
-            "connect-src 'self' https://login.microsoftonline.com"
+            "connect-src 'self' https://login.microsoftonline.com https://js.monitor.azure.com;"
         })
         {
             StringAssert.Contains(csp, directive);
         }
         Assert.IsFalse(csp.Contains("script-src 'self' 'unsafe-inline'"), "Inline scripts must stay blocked.");
+        StringAssert.Contains(csp, "script-src 'self';", "js.monitor.azure.com is fetch-only: script-src must not change.");
+        Assert.IsFalse(csp.Contains('*'), "No wildcard sources anywhere in the CSP.");
     }
 
     [TestMethod]

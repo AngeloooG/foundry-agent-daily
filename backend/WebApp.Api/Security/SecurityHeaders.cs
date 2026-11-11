@@ -35,6 +35,8 @@ public sealed class SecurityHeadersOptions
 /// - Application Insights (browser SDK, bundled from npm, not loaded from the CDN): ingestion and live
 ///   metrics hosts are read from APPLICATIONINSIGHTS_FRONTEND_CONNECTION_STRING (the same value the SPA is
 ///   built with). Only the hosts are used; the connection string is never logged.
+///   The SDK also fetches its dynamic configuration (scripts/b/ai.config.1.cfg.json) from
+///   https://js.monitor.azure.com, so that exact origin is in connect-src (fetch only; script-src stays 'self').
 /// - style-src 'unsafe-inline' is required: Fluent UI v9 (Griffel, used by FluentProvider, Spinner and
 ///   ErrorBoundary via makeStyles) injects &lt;style&gt; elements at runtime, and React renders inline
 ///   style attributes (App.tsx loading screen). Scripts stay 'self' only.
@@ -43,9 +45,12 @@ public static class ContentSecurityPolicyBuilder
 {
     public const string EntraOrigin = "https://login.microsoftonline.com";
 
+    /// <summary>Origin from which the Application Insights browser SDK fetches its dynamic configuration (CDN config file).</summary>
+    public const string AppInsightsConfigOrigin = "https://js.monitor.azure.com";
+
     public static string Build(IEnumerable<string> connectSources, bool allowSelfFraming)
     {
-        var connect = string.Join(' ', new[] { "'self'", EntraOrigin }.Concat(connectSources).Distinct(StringComparer.OrdinalIgnoreCase));
+        var connect = string.Join(' ', new[] { "'self'", EntraOrigin, AppInsightsConfigOrigin }.Concat(connectSources).Distinct(StringComparer.OrdinalIgnoreCase));
         var frameSrc = allowSelfFraming ? $"'self' {EntraOrigin}" : EntraOrigin;
 
         return string.Join("; ",

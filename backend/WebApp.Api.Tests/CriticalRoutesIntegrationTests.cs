@@ -342,6 +342,11 @@ public sealed class CriticalRoutesIntegrationTests
         StringAssert.Contains(csp, "base-uri 'self'");
         StringAssert.Contains(csp, "img-src 'self' data: blob:");
         StringAssert.Contains(csp, "https://login.microsoftonline.com");
+        StringAssert.Contains(csp, "https://js.monitor.azure.com");
+        // Permissions-Policy is intentionally unchanged by the CSP fix (no unload directive is sent today).
+        Assert.AreEqual("camera=(), microphone=(), geolocation=(), payment=()", response.Headers.GetValues("Permissions-Policy").Single());
+        Assert.AreEqual("strict-origin-when-cross-origin", response.Headers.GetValues("Referrer-Policy").Single());
+        Assert.AreEqual("DENY", response.Headers.GetValues("X-Frame-Options").Single());
         Assert.IsTrue(response.Headers.Contains("Strict-Transport-Security"));
     }
 
