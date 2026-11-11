@@ -1,0 +1,136 @@
+# Continuous integration for Daily: build, static analysis, tests and dependency audit.
+#
+# Scope (deliberate): this workflow NEVER authenticates to Azure, requests OIDC tokens,
+# reads Azure secrets, runs az/azd, deploys or changes infrastructure. It only compiles,
+# analyzes and tests the code that is in the repository.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, Develop-Daily]
+
+# Read-only token; no id-token permission (no OIDC / federated credentials).
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned toolchains. Node major matches deployment/docker/frontend.Dockerfile (node:22-alpine).
+  NODE_VERSION: "22.23.4"
+  DOTNET_SDK_VERSION: "10.0.303"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
+jobs:
+  frontend:
+    name: Frontend (lint, types, tests, build, audit)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install (lockfile only, no updates)
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type-check
+        run: npx tsc -b
+
+      - name: Unit tests
+        run: npx vitest run --reporter=default --reporter=junit --outputFile.junit=reports/junit.xml
+
+      - name: Build
+        run: npm run build
+
+      # Informative: audits never modify packages (no `npm audit fix`) and never fail the build.
+      # Findings are kept as artifacts and reviewed in the hardening reports.
+      - name: Audit report (informative)
+        if: always()
+        run: |
+          mkdir -p reports
+          npm audit --json > reports/npm-audit.json || true
+          npm audit --omit=dev --json > reports/npm-audit-runtime.json || true
+          npm audit --omit=dev || true
+
+      - name: Upload frontend reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-reports
+          path: frontend/reports/
+          if-no-files-found: warn
+          retention-days: 14
+
+  backend:
+    name: Backend (build, tests, vulnerable packages)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_SDK_VERSION }}
+
+      - name: Restore
+        run: dotnet restore WebApp.sln
+
+      - name: Build
+        run: dotnet build WebApp.sln --no-restore --configuration Release
+
+      - name: Test (TRX report)
+        run: >
+          dotnet test WebApp.sln --no-build --configuration Release
+          -p:TestingPlatformCommandLineArguments="--report-trx --results-directory ${{ github.workspace }}/backend/TestResults"
+
+      # Informative: reported as a warning annotation and artifact, does not fail the build.
+      - name: Vulnerable packages (informative)
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p TestResults
+          dotnet list WebApp.sln package --vulnerable --include-transitive | tee TestResults/vulnerable-packages.txt
+          if grep -qiE "has the following vulnerable packages|tiene los paquetes vulnerables" TestResults/vulnerable-packages.txt; then
+            echo "::warning::Vulnerable NuGet packages found (see vulnerable-packages.txt)"
+          fi
+
+      - name: Upload backend reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-reports
+          path: backend/TestResults/
+          if-no-files-found: warn
+          retention-days: 14
+
+  deployment-scripts:
+    name: Deployment scripts (Base64 transport of frontend App Insights)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # Fictitious values only; no Azure, no secrets. Fails on any non-zero exit code.
+      - name: Validate Base64 transport
+        run: bash deployment/tests/test-frontend-appinsights-b64.sh

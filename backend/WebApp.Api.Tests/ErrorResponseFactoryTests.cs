@@ -12,6 +12,7 @@ public class ErrorResponseFactoryTests
     [DataRow(404, "Not Found")]
     [DataRow(429, "Too Many Requests")]
     [DataRow(500, "Service Temporarily Unavailable")]
+    [DataRow(502, "AI Service Error")]
     [DataRow(503, "Service Unavailable")]
     public void CreateFromException_MapsStatusCodeToTitle(int statusCode, string expectedTitle)
     {

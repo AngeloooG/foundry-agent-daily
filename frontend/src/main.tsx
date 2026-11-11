@@ -57,4 +57,12 @@ msalInstance.initialize().then(() => {
       </MsalProvider>
     </React.StrictMode>
   );
+}).catch(() => {
+  // MSAL could not start (blocked storage, misconfiguration): show a message instead of a blank page.
+  // The error object is not logged (it can contain request details).
+  const rootElement = document.getElementById('root');
+  if (rootElement) {
+    rootElement.textContent =
+      'No se pudo iniciar la sesión. Recarga la página o contacta al administrador. / Sign-in could not start. Reload the page or contact your administrator.';
+  }
 });

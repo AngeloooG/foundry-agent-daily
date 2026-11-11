@@ -24,6 +24,6 @@
     }
   },
   "forwardPorts": [5173, 8080],
-  "postCreateCommand": "dotnet restore backend/WebApp.Api/WebApp.Api.csproj && cd frontend && npm install --legacy-peer-deps",
+  "postCreateCommand": "dotnet restore backend/WebApp.Api/WebApp.Api.csproj && cd frontend && npm ci",
   "remoteUser": "vscode"
 }

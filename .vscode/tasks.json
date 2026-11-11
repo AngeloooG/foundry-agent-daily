@@ -116,7 +116,7 @@
       "label": "Install Frontend Dependencies",
       "type": "shell",
       "command": "npm",
-      "args": ["install", "--legacy-peer-deps"],
+      "args": ["install"],
       "options": {
         "cwd": "${workspaceFolder}/frontend"
       },

@@ -7,11 +7,8 @@ import { isAppError } from '../types/errors';
 import { trackException } from './telemetry';
 import {
   createAppError,
+  createAppErrorFromResponse,
   getErrorCodeFromMessage,
-  parseErrorFromResponse,
-  getErrorCodeFromResponse,
-  isTokenExpiredError,
-  retryWithBackoff,
 } from '../utils/errorHandler';
 import {
   convertFilesToDataUris,
@@ -19,33 +16,47 @@ import {
 } from '../utils/fileAttachments';
 import { parseSseLine, splitSseBuffer } from '../utils/sseParser';
 
+type FileDataUri = { dataUri: string; fileName: string; mimeType: string };
+
+/** Mutable progress of one stream attempt, shared with the retry policy. */
+interface StreamProgress {
+  /** Conversation id known so far (sent by the server in the first SSE event). */
+  conversationId: string | null;
+  /** True once the server accepted the request and opened the SSE stream. */
+  started: boolean;
+}
+
+/** Statuses that mean "the request did not reach the agent"; safe to retry. */
+const RETRYABLE_STATUSES = new Set([502, 503, 504]);
+const MAX_ATTEMPTS = 3;
+const RETRY_BASE_DELAY_MS = 1000;
+
+function newId(): string {
+  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError';
+}
+
 /**
- * ChatService handles all chat-related API operations.
- * Dispatches AppContext actions for state management.
- * 
- * @example
- * ```typescript
- * const chatService = new ChatService(
- *   '/api',
- *   getAccessToken,
- *   dispatch
- * );
- * 
- * // Send a message with images
- * await chatService.sendMessage(
- *   'Analyze this image',
- *   currentThreadId,
- *   [imageFile]
- * );
- * ```
+ * ChatService handles all chat-related API operations and dispatches AppContext actions.
+ *
+ * One instance lives for the whole signed-in session (see ChatServiceProvider), so the active
+ * stream can always be cancelled. `sendMessage` never throws: failures are reported through
+ * state (CHAT_RECOVER_MESSAGE restores the user's text so nothing typed is lost).
+ *
+ * Retry policy (idempotency): a message is retried only when the request failed before the server
+ * opened the stream (network error or 502/503/504). Once the stream started, the agent has
+ * received the message, so retrying would duplicate it in the conversation.
  */
 export class ChatService {
   private apiUrl: string;
   private getAccessToken: () => Promise<string | null>;
   private dispatch: Dispatch<AppAction>;
   private currentStreamAbort?: AbortController;
-  // Flag indicating an intentional user cancellation of the active stream.
-  private streamCancelled = false;
 
   constructor(
     apiUrl: string,
@@ -58,11 +69,8 @@ export class ChatService {
   }
 
   /**
-   * Acquire authentication token using MSAL.
-   * Attempts silent acquisition first, falls back to popup if needed.
-   * 
-   * @returns Access token string
-   * @throws {Error} If token acquisition fails
+   * Acquire an access token (silent, then interactive — see useAuth).
+   * @throws {AppError} AUTH when no token can be obtained
    */
   private async ensureAuthToken(): Promise<string> {
     const token = await this.getAccessToken();
@@ -73,67 +81,62 @@ export class ChatService {
   }
 
   /**
-   * Prepare message payload with optional file attachments.
-   * Converts files to data URIs and separates images from documents.
-   * 
-   * @param text - Message text content
-   * @param files - Optional array of files (images and documents)
-   * @returns Payload with content, image URIs, file attachments, and attachment metadata
+   * Authenticated fetch against the API. Non-OK responses become AppErrors (status preserved).
+   * @throws {AppError}
    */
-  private async prepareMessagePayload(
-    text: string,
-    files?: File[]
-  ): Promise<{
-    content: string;
-    imageDataUris: string[];
-    fileDataUris: Array<{ dataUri: string; fileName: string; mimeType: string }>;
-    attachments: IChatItem['attachments'];
-  }> {
-    let imageDataUris: string[] = [];
-    let fileDataUris: Array<{ dataUri: string; fileName: string; mimeType: string }> = [];
-    let attachments: IChatItem['attachments'] = undefined;
+  private async apiFetch(path: string, init: RequestInit = {}, signal?: AbortSignal): Promise<Response> {
+    const token = await this.ensureAuthToken();
+    const response = await fetch(`${this.apiUrl}${path}`, {
+      ...init,
+      signal,
+      headers: {
+        ...(init.headers ?? {}),
+        Authorization: `Bearer ${token}`,
+      },
+    });
 
-    if (files && files.length > 0) {
-      try {
-        const results = await convertFilesToDataUris(files);
-        
-        // Separate images from documents
-        const imageResults = results.filter((r) => r.mimeType.startsWith('image/'));
-        const fileResults = results.filter((r) => !r.mimeType.startsWith('image/'));
-        
-        imageDataUris = imageResults.map((r) => r.dataUri);
-        fileDataUris = fileResults.map((r) => ({
-          dataUri: r.dataUri,
-          fileName: r.name,
-          mimeType: r.mimeType,
-        }));
-        
-        // Create attachment metadata for UI display
-        attachments = createAttachmentMetadata(results);
-      } catch (error) {
-        const appError = createAppError(error);
-        this.dispatch({ type: 'CHAT_ERROR', error: appError });
-        throw appError;
-      }
+    if (!response.ok) {
+      throw await createAppErrorFromResponse(response);
     }
-
-    return { content: text, imageDataUris, fileDataUris, attachments };
+    return response;
   }
 
   /**
-   * Construct request body for chat API.
-   * 
-   * @param message - User message text
-   * @param conversationId - Current conversation ID (null for new conversations)
-   * @param imageDataUris - Array of base64 data URIs for images
-   * @param fileDataUris - Array of file attachments with metadata
-   * @returns Request body object
+   * Convert attached files to data URIs and separate images from documents.
+   * @throws {AppError} VALIDATION when a file is not supported
    */
+  private async prepareMessagePayload(files?: File[]): Promise<{
+    imageDataUris: string[];
+    fileDataUris: FileDataUri[];
+    attachments: IChatItem['attachments'];
+  }> {
+    if (!files || files.length === 0) {
+      return { imageDataUris: [], fileDataUris: [], attachments: undefined };
+    }
+
+    try {
+      const results = await convertFilesToDataUris(files);
+      return {
+        imageDataUris: results.filter((r) => r.mimeType.startsWith('image/')).map((r) => r.dataUri),
+        fileDataUris: results
+          .filter((r) => !r.mimeType.startsWith('image/'))
+          .map((r) => ({ dataUri: r.dataUri, fileName: r.name, mimeType: r.mimeType })),
+        attachments: createAttachmentMetadata(results),
+      };
+    } catch (error) {
+      const appError = createAppError(error, 'VALIDATION');
+      if (error instanceof Error && error.message) {
+        appError.message = error.message;
+      }
+      throw appError;
+    }
+  }
+
   private constructRequestBody(
     message: string,
     conversationId: string | null,
     imageDataUris: string[],
-    fileDataUris: Array<{ dataUri: string; fileName: string; mimeType: string }>
+    fileDataUris: FileDataUri[]
   ): Record<string, unknown> {
     return {
       message,
@@ -143,96 +146,73 @@ export class ChatService {
     };
   }
 
-  /**
-   * Initiate streaming fetch request to chat API.
-   * Validates response and throws typed errors on failure.
-   * 
-   * @param url - API endpoint URL
-   * @param token - Access token
-   * @param body - Request body
-   * @param signal - Abort signal for cancellation
-   * @returns Response object
-   * @throws {AppError} If request fails or response is not OK
-   */
-  private async initiateStream(
-    url: string,
-    token: string,
-    body: Record<string, unknown>,
-    signal: AbortSignal
-  ): Promise<Response> {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(body),
-      signal,
-    });
+  private async initiateStream(body: Record<string, unknown>, signal: AbortSignal): Promise<Response> {
+    return this.apiFetch(
+      '/chat/stream',
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+      signal
+    );
+  }
 
-    if (!res.ok) {
-      const errorMessage = await parseErrorFromResponse(res);
-      const errorCode = getErrorCodeFromResponse(res);
-      throw createAppError(new Error(errorMessage), errorCode);
+  /** Retry only failures that happened before the server accepted the message. */
+  private isRetryable(error: unknown, progress: StreamProgress): boolean {
+    if (progress.started) {
+      return false;
     }
+    if (isAppError(error)) {
+      return error.status !== undefined && RETRYABLE_STATUSES.has(error.status);
+    }
+    // fetch() rejects with TypeError on network failures (request never got a response).
+    return error instanceof TypeError;
+  }
 
-    return res;
+  private toAppError(error: unknown): AppError {
+    return isAppError(error) ? error : createAppError(error, getErrorCodeFromMessage(error));
   }
 
   /**
-   * Send a message and stream the response from the Azure AI Agent.
-   * Orchestrates authentication, file conversion, optimistic UI updates, and streaming.
-   * Retries the full stream cycle up to 3 times on retryable errors, then recovers
-   * the message text back to the input if all retries fail.
+   * Send a message and stream the agent's response.
+   * Never throws: errors are dispatched to state and the user's text is restored.
    *
    * @param messageText - The user's message text
-   * @param currentConversationId - Current conversation ID (null for new conversations)
-   * @param files - Optional array of files to attach (images and documents)
-   * @throws {Error} If authentication fails (non-retryable)
+   * @param currentConversationId - Current conversation ID (null for a new conversation)
+   * @param files - Optional attachments (images and documents)
    */
   async sendMessage(
     messageText: string,
     currentConversationId: string | null,
     files?: File[]
   ): Promise<void> {
-    if (this.currentStreamAbort) {
-      this.streamCancelled = true;
-      this.currentStreamAbort.abort();
-      this.dispatch({ type: 'CHAT_CANCEL_STREAM' });
-    }
+    // Only one stream at a time.
+    this.cancelStream();
 
-    let token: string;
+    // 1. Prepare everything that can fail before touching the conversation UI.
+    let payload: Awaited<ReturnType<ChatService['prepareMessagePayload']>>;
     try {
-      token = await this.ensureAuthToken();
+      payload = await this.prepareMessagePayload(files);
+      await this.ensureAuthToken();
     } catch (error) {
-      if (isTokenExpiredError(error)) {
+      const appError = this.toAppError(error);
+      if (appError.code === 'AUTH') {
         this.dispatch({ type: 'AUTH_TOKEN_EXPIRED' });
       }
-      const appError: AppError = isAppError(error)
-        ? error
-        : createAppError(error, 'AUTH');
-      this.dispatch({ type: 'CHAT_ERROR', error: appError });
-      throw error;
+      this.dispatch({ type: 'CHAT_RECOVER_MESSAGE', messageText, error: appError, retryCount: 1, messageIds: [] });
+      return;
     }
 
-    const { content, imageDataUris, fileDataUris, attachments } = await this.prepareMessagePayload(
-      messageText,
-      files
-    );
-
-    const userMessage: IChatItem = {
-      id: Date.now().toString(),
-      role: 'user',
-      content,
-      attachments,
-      more: {
-        time: new Date().toISOString(),
+    // 2. Optimistic UI: user message + empty assistant message.
+    const userMessageId = newId();
+    const assistantMessageId = newId();
+    this.dispatch({
+      type: 'CHAT_SEND_MESSAGE',
+      message: {
+        id: userMessageId,
+        role: 'user',
+        content: messageText,
+        attachments: payload.attachments,
+        more: { time: new Date().toISOString() },
       },
-    };
-
-    this.dispatch({ type: 'CHAT_SEND_MESSAGE', message: userMessage });
-
-    const assistantMessageId = (Date.now() + 1).toString();
+    });
     this.dispatch({ type: 'CHAT_ADD_ASSISTANT_MESSAGE', messageId: assistantMessageId });
     this.dispatch({
       type: 'CHAT_START_STREAM',
@@ -240,127 +220,85 @@ export class ChatService {
       messageId: assistantMessageId,
     });
 
-    const requestBody = this.constructRequestBody(
-      messageText,
-      currentConversationId,
-      imageDataUris,
-      fileDataUris
-    );
-
-    const maxRetries = 3;
+    // 3. Stream, retrying only while it is safe to do so.
+    const progress: StreamProgress = { conversationId: currentConversationId, started: false };
     let lastError: unknown;
+    let attempt = 0;
 
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    while (attempt < MAX_ATTEMPTS) {
+      attempt++;
+      const abort = new AbortController();
+      this.currentStreamAbort = abort;
+
       try {
         if (attempt > 1) {
-          this.dispatch({
-            type: 'CHAT_STREAM_RETRY',
-            messageId: assistantMessageId,
-            attempt,
-            maxRetries,
-          });
-          await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, attempt - 1)));
+          this.dispatch({ type: 'CHAT_STREAM_RETRY', messageId: assistantMessageId, attempt, maxRetries: MAX_ATTEMPTS });
+          await new Promise((resolve) => setTimeout(resolve, RETRY_BASE_DELAY_MS * 2 ** (attempt - 2)));
+          if (abort.signal.aborted) return;
         }
 
-        this.currentStreamAbort = new AbortController();
-        this.streamCancelled = false;
+        progress.started = false;
+        const body = this.constructRequestBody(messageText, progress.conversationId, payload.imageDataUris, payload.fileDataUris);
+        const response = await this.initiateStream(body, abort.signal);
+        progress.started = true;
 
-        const response = await this.initiateStream(
-          `${this.apiUrl}/chat/stream`,
-          token,
-          requestBody,
-          this.currentStreamAbort.signal
-        );
-
-        await this.processStream(response, assistantMessageId, currentConversationId);
-        this.currentStreamAbort = undefined;
-        this.streamCancelled = false;
+        await this.processStream(response, assistantMessageId, progress, abort.signal);
         return;
       } catch (error) {
+        if (abort.signal.aborted || isAbortError(error)) {
+          return; // user cancelled; CHAT_CANCEL_STREAM already dispatched
+        }
         lastError = error;
-        this.currentStreamAbort = undefined;
-        this.streamCancelled = false;
-
-        // User cancelled
-        if (error instanceof DOMException && error.name === 'AbortError') {
-          return;
-        }
-
-        if (isTokenExpiredError(error)) {
-          this.dispatch({ type: 'AUTH_TOKEN_EXPIRED' });
-          throw error;
-        }
-
-        if (isAppError(error) && error.code === 'AUTH') {
-          this.dispatch({ type: 'CHAT_ERROR', error });
-          throw error;
-        }
-
-        if (attempt === maxRetries) {
+        if (!this.isRetryable(error, progress)) {
           break;
+        }
+      } finally {
+        if (this.currentStreamAbort === abort) {
+          this.currentStreamAbort = undefined;
         }
       }
     }
 
-    trackException(lastError instanceof Error ? lastError : new Error(String(lastError)), {
-      context: 'sendMessage',
-      retryCount: String(maxRetries),
-    });
-
-    const appError: AppError = isAppError(lastError)
-      ? lastError
-      : createAppError(lastError, getErrorCodeFromMessage(lastError));
-
+    const appError = this.toAppError(lastError);
+    trackException(appError, { context: 'sendMessage', attempts: String(attempt) });
+    if (appError.code === 'AUTH') {
+      this.dispatch({ type: 'AUTH_TOKEN_EXPIRED' });
+    }
     this.dispatch({
       type: 'CHAT_RECOVER_MESSAGE',
       messageText,
       error: appError,
-      retryCount: maxRetries,
+      retryCount: attempt,
+      messageIds: [userMessageId, assistantMessageId],
     });
   }
 
   /**
-   * Process Server-Sent Events stream from the API.
-   * Implements duplicate chunk suppression to prevent UI flicker.
-   * 
-   * @param response - Fetch Response object with SSE stream
-   * @param messageId - ID of the assistant message being streamed
-   * @param currentConversationId - Current conversation ID (null for new conversations)
-   * @throws {Error} If stream is not readable or parsing fails
+   * Process the Server-Sent Events stream.
+   * Resolves on `done`; throws on an `error` event or if the stream ends without `done`
+   * (otherwise the UI would stay in "responding" forever).
    */
   private async processStream(
     response: Response,
     messageId: string,
-    currentConversationId: string | null
+    progress: StreamProgress,
+    signal: AbortSignal
   ): Promise<void> {
     const reader = response.body?.getReader();
-    const decoder = new TextDecoder();
-
     if (!reader) {
-      const error = createAppError(
-        new Error(`Response body is not readable for message ${messageId}`),
-        'STREAM'
-      );
-      this.dispatch({ type: 'CHAT_ERROR', error });
-      throw error;
+      throw createAppError(new Error('Response body is not readable'), 'STREAM');
     }
 
-    let newConversationId = currentConversationId;
-    let lastChunkContent: string | undefined;
+    const decoder = new TextDecoder();
     let buffer = '';
+    let completed = false;
 
     try {
-      while (true) {
-        if (this.streamCancelled) {
-          break;
-        }
-
+      while (!signal.aborted) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value, { stream: true });
-        buffer += chunk;
-
+        buffer += decoder.decode(value, { stream: true });
         const [lines, remaining] = splitSseBuffer(buffer);
         buffer = remaining;
 
@@ -368,56 +306,31 @@ export class ChatService {
           const event = parseSseLine(line);
           if (!event) continue;
 
-          if (event.data?.error) {
-            console.error('[ChatService] SSE error event received:', event.data.error);
-            const error = createAppError(
-              new Error(event.data.error.message || event.data.error || 'Stream error occurred'),
-              'STREAM'
-            );
-            this.dispatch({ type: 'CHAT_ERROR', error });
-            throw error;
-          }
-
           switch (event.type) {
             case 'conversationId':
-              if (!newConversationId) {
-                newConversationId = event.data.conversationId;
-                this.dispatch({
-                  type: 'CHAT_START_STREAM',
-                  conversationId: event.data.conversationId,
-                  messageId,
-                });
+              if (event.data.conversationId && event.data.conversationId !== progress.conversationId) {
+                progress.conversationId = event.data.conversationId;
+                this.dispatch({ type: 'CHAT_START_STREAM', conversationId: event.data.conversationId, messageId });
               }
               break;
 
             case 'chunk':
-              if (event.data.content !== lastChunkContent) {
-                this.dispatch({
-                  type: 'CHAT_STREAM_CHUNK',
-                  messageId,
-                  content: event.data.content,
-                });
-                lastChunkContent = event.data.content;
-              }
+              // Every chunk is a delta and must be appended, even when it equals the previous one
+              // ("\n" + "\n", " " + " ", repeated tokens). Never deduplicate by content: the stream
+              // has no event ids, and a single HTTP response does not replay events. Idempotency,
+              // if ever needed, must rely on a server-provided event id, not on the text.
+              this.dispatch({ type: 'CHAT_STREAM_CHUNK', messageId, content: event.data.content });
               break;
 
             case 'annotations':
-              if (event.data.annotations && event.data.annotations.length > 0) {
-                this.dispatch({
-                  type: 'CHAT_STREAM_ANNOTATIONS',
-                  messageId,
-                  annotations: event.data.annotations,
-                });
+              if (event.data.annotations?.length > 0) {
+                this.dispatch({ type: 'CHAT_STREAM_ANNOTATIONS', messageId, annotations: event.data.annotations });
               }
               break;
 
             case 'toolUse':
               if (event.data.toolName) {
-                this.dispatch({
-                  type: 'CHAT_STREAM_TOOL_USE',
-                  messageId,
-                  toolName: event.data.toolName,
-                });
+                this.dispatch({ type: 'CHAT_STREAM_TOOL_USE', messageId, toolName: event.data.toolName });
               }
               break;
 
@@ -433,6 +346,7 @@ export class ChatService {
               break;
 
             case 'usage':
+              completed = true;
               this.dispatch({
                 type: 'CHAT_STREAM_COMPLETE',
                 usage: {
@@ -445,36 +359,29 @@ export class ChatService {
               break;
 
             case 'done':
+              if (!completed) {
+                this.dispatch({
+                  type: 'CHAT_STREAM_COMPLETE',
+                  usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0, duration: 0 },
+                });
+              }
               return;
 
             case 'error': {
-              const error = createAppError(
-                new Error(`Stream error for message ${messageId}: ${event.data.message}`),
-                'STREAM'
-              );
-              this.dispatch({ type: 'CHAT_ERROR', error });
+              // The server already sanitizes this message for production.
+              const error = createAppError(new Error('Stream error event'), 'STREAM');
+              if (typeof event.data.message === 'string' && event.data.message) {
+                error.message = event.data.message;
+              }
               throw error;
             }
           }
         }
       }
-    } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError' && this.streamCancelled) {
-        // User intentionally cancelled the stream - not an error condition
-        return;
-      }
 
-      const appError =
-        error instanceof Error && 'code' in error
-          ? error
-          : createAppError(
-              new Error(
-                `Stream processing failed: ${error instanceof Error ? error.message : String(error)} (Conversation: ${currentConversationId}, Message: ${messageId})`
-              ),
-              'STREAM'
-            );
-      this.dispatch({ type: 'CHAT_ERROR', error: appError as AppError });
-      throw error;
+      if (!signal.aborted) {
+        throw createAppError(new Error('Stream ended before completion'), 'STREAM');
+      }
     } finally {
       try {
         reader.releaseLock();
@@ -485,12 +392,7 @@ export class ChatService {
   }
 
   /**
-   * Send approval response for an MCP tool call.
-   * 
-   * @param approvalRequestId - ID of the approval request
-   * @param approved - Whether the tool call was approved
-   * @param previousResponseId - Response ID to continue from
-   * @param conversationId - Current conversation ID
+   * Send the user's decision for an MCP tool call. Not retried: an approval is not idempotent.
    */
   async sendMcpApproval(
     approvalRequestId: string,
@@ -498,102 +400,70 @@ export class ChatService {
     previousResponseId: string,
     conversationId: string
   ): Promise<void> {
+    this.cancelStream();
+    const assistantMessageId = newId();
+    const abort = new AbortController();
+    this.currentStreamAbort = abort;
+
     try {
-      const token = await this.ensureAuthToken();
-
-      const assistantMessageId = Date.now().toString();
       this.dispatch({ type: 'CHAT_ADD_ASSISTANT_MESSAGE', messageId: assistantMessageId });
-      this.dispatch({
-        type: 'CHAT_START_STREAM',
-        conversationId,
-        messageId: assistantMessageId,
-      });
+      this.dispatch({ type: 'CHAT_START_STREAM', conversationId, messageId: assistantMessageId });
 
-      this.currentStreamAbort = new AbortController();
-      this.streamCancelled = false;
-
-      const requestBody = {
-        message: approved ? 'Approved' : 'Rejected',
-        conversationId,
-        previousResponseId,
-        mcpApproval: {
-          approvalRequestId,
-          approved,
+      const response = await this.initiateStream(
+        {
+          message: approved ? 'Approved' : 'Rejected',
+          conversationId,
+          previousResponseId,
+          mcpApproval: { approvalRequestId, approved },
         },
-      };
-
-      const response = await retryWithBackoff(
-        async () =>
-          this.initiateStream(
-            `${this.apiUrl}/chat/stream`,
-            token,
-            requestBody,
-            this.currentStreamAbort!.signal
-          ),
-        3,
-        1000
+        abort.signal
       );
 
-      await this.processStream(response, assistantMessageId, conversationId);
-      this.currentStreamAbort = undefined;
-      this.streamCancelled = false;
+      await this.processStream(response, assistantMessageId, { conversationId, started: true }, abort.signal);
     } catch (error) {
-      this.currentStreamAbort = undefined;
-      this.streamCancelled = false;
-
-      if (error instanceof DOMException && error.name === 'AbortError') {
+      if (abort.signal.aborted || isAbortError(error)) {
         return;
       }
-
-      trackException(error instanceof Error ? error : new Error(String(error)), { context: 'sendMcpApproval' });
-
-      const appError: AppError = isAppError(error)
-        ? error
-        : createAppError(error, getErrorCodeFromMessage(error));
-
+      const appError = this.toAppError(error);
+      trackException(appError, { context: 'sendMcpApproval' });
       this.dispatch({ type: 'CHAT_ERROR', error: appError });
-      throw error;
+    } finally {
+      if (this.currentStreamAbort === abort) {
+        this.currentStreamAbort = undefined;
+      }
     }
   }
 
-  /**
-   * Clear chat history and reset to empty state.
-   * Dispatches CHAT_CLEAR action to remove all messages and conversation ID.
-   */
   clearChat(): void {
     this.dispatch({ type: 'CHAT_CLEAR' });
   }
 
-  /**
-   * Clear current error state without affecting chat history.
-   * Dispatches CHAT_CLEAR_ERROR action.
-   */
   clearError(): void {
     this.dispatch({ type: 'CHAT_CLEAR_ERROR' });
   }
 
-  /**
-   * Cancel the current streaming response if any is active.
-   * Abort controller is not cleared immediately to allow processStream
-   * to observe the cancellation flag and exit gracefully.
-   */
+  /** Cancel the active stream, if any. Safe to call when nothing is streaming. */
   cancelStream(): void {
     if (this.currentStreamAbort) {
-      this.streamCancelled = true;
-      this.currentStreamAbort.abort();
+      const abort = this.currentStreamAbort;
+      this.currentStreamAbort = undefined;
+      abort.abort();
       this.dispatch({ type: 'CHAT_CANCEL_STREAM' });
     }
   }
 
-  async downloadFile(fileId: string, fileName?: string, containerId?: string): Promise<void> {
-    const token = await this.ensureAuthToken();
-    const params = containerId ? `?containerId=${encodeURIComponent(containerId)}` : '';
-    const response = await fetch(`${this.apiUrl}/files/${encodeURIComponent(fileId)}${params}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!response.ok) throw new Error(`File download failed: ${response.status}`);
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
+  /**
+   * Download a file cited or generated in a conversation the user owns.
+   * The backend only serves files referenced by that conversation.
+   */
+  async downloadFile(fileId: string, conversationId: string, fileName?: string, containerId?: string): Promise<void> {
+    const params = new URLSearchParams({ conversationId });
+    if (containerId) {
+      params.set('containerId', containerId);
+    }
+
+    const response = await this.apiFetchAsApi(`/files/${encodeURIComponent(fileId)}?${params.toString()}`);
+    const url = URL.createObjectURL(await response.blob());
     const a = document.createElement('a');
     a.href = url;
     a.download = fileName || fileId;
@@ -603,90 +473,31 @@ export class ChatService {
     setTimeout(() => URL.revokeObjectURL(url), 100);
   }
 
-  /**
-   * List all conversations from the server.
-   * @returns Array of conversation summaries
-   */
+  /** List the signed-in user's conversations. */
   async listConversations(limit: number = 20): Promise<{ conversations: ConversationSummary[]; hasMore: boolean }> {
-    const token = await this.ensureAuthToken();
-    const response = await fetch(`${this.apiUrl}/conversations?limit=${limit}`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
-
-    if (!response.ok) {
-      throw createAppError(new Error(`Failed to list conversations: ${response.status}`), 'API');
-    }
-
+    const response = await this.apiFetchAsApi(`/conversations?limit=${limit}`);
     return response.json();
   }
 
-  /**
-   * Get messages for a specific conversation.
-   * @param conversationId - The conversation ID to fetch messages for
-   * @returns Array of conversation messages
-   */
+  /** Messages of a conversation owned by the signed-in user. */
   async getConversationMessages(conversationId: string): Promise<ConversationMessageInfo[]> {
-    const token = await this.ensureAuthToken();
-    const response = await fetch(`${this.apiUrl}/conversations/${conversationId}/messages`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
-
-    if (!response.ok) {
-      throw createAppError(new Error(`Failed to get conversation messages: ${response.status}`), 'API');
-    }
-
+    const response = await this.apiFetchAsApi(`/conversations/${encodeURIComponent(conversationId)}/messages`);
     return response.json();
   }
 
-  /**
-   * Delete a conversation.
-   * @param conversationId - The conversation ID to delete
-   */
   async deleteConversation(conversationId: string): Promise<void> {
-    const token = await this.ensureAuthToken();
-    const response = await fetch(`${this.apiUrl}/conversations/${conversationId}`, {
-      method: 'DELETE',
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
-
-    if (!response.ok) {
-      throw createAppError(new Error(`Failed to delete conversation: ${response.status}`), 'API');
-    }
+    await this.apiFetchAsApi(`/conversations/${encodeURIComponent(conversationId)}`, { method: 'DELETE' });
   }
 
-  /**
-   * Get a summary of files uploaded by this web app that are still stored in the Foundry project.
-   * Scoped to files whose names begin with the web-app upload prefix (see backend).
-   */
-  async getUploadedFilesInfo(): Promise<{ count: number; totalBytes: number }> {
-    const token = await this.ensureAuthToken();
-    const response = await fetch(`${this.apiUrl}/files/uploaded`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!response.ok) {
-      throw createAppError(new Error(`Failed to list uploaded files: ${response.status}`), 'API');
+  /** REST calls report failures with the 'API' code (validation/auth codes are kept). */
+  private async apiFetchAsApi(path: string, init?: RequestInit): Promise<Response> {
+    try {
+      return await this.apiFetch(path, init);
+    } catch (error) {
+      if (isAppError(error) && (error.code === 'SERVER' || error.code === 'UNKNOWN')) {
+        error.code = 'API';
+      }
+      throw error;
     }
-    return response.json();
-  }
-
-  /**
-   * Delete every uploaded file that this web app previously uploaded for image attachments.
-   */
-  async cleanupUploadedFiles(): Promise<{ deleted: number; failed: number }> {
-    const token = await this.ensureAuthToken();
-    const response = await fetch(`${this.apiUrl}/files/cleanup`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!response.ok) {
-      throw createAppError(new Error(`Failed to clean up uploaded files: ${response.status}`), 'API');
-    }
-    return response.json();
   }
 }

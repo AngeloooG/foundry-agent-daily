@@ -19,8 +19,6 @@ $clientId = Get-AzdValue 'ENTRA_SPA_CLIENT_ID'
 $tenantId = Get-AzdValue 'ENTRA_TENANT_ID'
 $backendClientId = Get-AzdValue 'ENTRA_BACKEND_CLIENT_ID'
 $appInsightsConnStr = Get-AzdValue 'APPLICATIONINSIGHTS_FRONTEND_CONNECTION_STRING'
-# Escape semicolons for ACR cloud builds — unescaped semicolons are interpreted as shell command separators
-if ($appInsightsConnStr) { $appInsightsConnStrEscaped = $appInsightsConnStr -replace ';', '\;' } else { $appInsightsConnStrEscaped = '' }
 $acrName = Get-AzdValue 'AZURE_CONTAINER_REGISTRY_NAME'
 $resourceGroup = Get-AzdValue 'AZURE_RESOURCE_GROUP_NAME'
 $containerApp = Get-AzdValue 'AZURE_CONTAINER_APP_NAME'
@@ -32,6 +30,25 @@ if (-not $clientId -or -not $tenantId) {
 if (-not $acrName) {
     Write-Host "[ERROR] AZURE_CONTAINER_REGISTRY_NAME not set" -ForegroundColor Red
     exit 1
+}
+# Browser telemetry is required in deployed images (the Dockerfile fails without it).
+if ([string]::IsNullOrWhiteSpace($appInsightsConnStr)) {
+    Write-Host "[ERROR] APPLICATIONINSIGHTS_FRONTEND_CONNECTION_STRING not set" -ForegroundColor Red
+    exit 1
+}
+
+# Transport the frontend App Insights connection string as Base64 (UTF-8). This is NOT a secrecy
+# measure (the value ends up in the JavaScript bundle by design); it only avoids quoting problems
+# with ';', '/', '=' and 'https://' across PowerShell, Azure CLI, ACR Tasks and the build shell.
+# The Dockerfile decodes it inside the `npm run build` step. Neither value is ever printed.
+$appInsightsB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($appInsightsConnStr.Trim()))
+Remove-Variable appInsightsConnStr
+$appInsightsArgName = 'APPLICATIONINSIGHTS_FRONTEND_CONNECTION_STRING_B64'
+
+# Remove the Base64 value from any text before printing it (defense in depth for error output).
+function Hide-BuildValue([string]$text) {
+    if ([string]::IsNullOrEmpty($text)) { return $text }
+    return $text.Replace($appInsightsB64, '<redacted>')
 }
 
 $imageTag = "deploy-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
@@ -59,10 +76,16 @@ try {
             "--build-arg", "ENTRA_TENANT_ID=$tenantId"
         )
         if ($backendClientId) { $buildArgs += @("--build-arg", "ENTRA_BACKEND_CLIENT_ID=$backendClientId") }
-        if ($appInsightsConnStr) { $buildArgs += @("--build-arg", "APPLICATIONINSIGHTS_FRONTEND_CONNECTION_STRING=$appInsightsConnStr") }
+        # Name only: Docker reads the value from the environment, so it is not on the docker command line.
+        $buildArgs += @("--build-arg", $appInsightsArgName)
         $buildArgs += @("-f", "deployment/docker/frontend.Dockerfile", "-t", $imageName, ".")
-        docker build @buildArgs 2>&1 | Out-Host
-        if ($LASTEXITCODE -ne 0) { throw "Docker build failed" }
+        [Environment]::SetEnvironmentVariable($appInsightsArgName, $appInsightsB64, 'Process')
+        try {
+            docker build @buildArgs 2>&1 | ForEach-Object { Hide-BuildValue "$_" } | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw "Docker build failed" }
+        } finally {
+            [Environment]::SetEnvironmentVariable($appInsightsArgName, $null, 'Process')
+        }
         
         Write-Host "Pushing to ACR..." -ForegroundColor Cyan
         az acr login --name $acrName | Out-Null
@@ -72,14 +95,15 @@ try {
         Write-Host "Using ACR cloud build (3-5 min)..." -ForegroundColor Yellow
         $acrBuildArgs = @("--build-arg", "ENTRA_SPA_CLIENT_ID=$clientId", "--build-arg", "ENTRA_TENANT_ID=$tenantId")
         if ($backendClientId) { $acrBuildArgs += @("--build-arg", "ENTRA_BACKEND_CLIENT_ID=$backendClientId") }
-        if ($appInsightsConnStrEscaped) { $acrBuildArgs += @("--build-arg", "APPLICATIONINSIGHTS_FRONTEND_CONNECTION_STRING=$appInsightsConnStrEscaped") }
+        # Secret build arg as operational hygiene ("not surfaced to the ACR team"); not a confidentiality guarantee.
+        $acrBuildArgs += @("--secret-build-arg", "$appInsightsArgName=$appInsightsB64")
         $buildOutput = az acr build --registry $acrName --image "web:$imageTag" `
             @acrBuildArgs `
             --file deployment/docker/frontend.Dockerfile . `
             --no-logs --only-show-errors 2>&1
 
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "Build output: $buildOutput" -ForegroundColor Red
+            Write-Host "Build output: $(Hide-BuildValue ($buildOutput | Out-String))" -ForegroundColor Red
             throw "ACR build failed"
         }
         Write-Host "[OK] ACR build completed" -ForegroundColor Green

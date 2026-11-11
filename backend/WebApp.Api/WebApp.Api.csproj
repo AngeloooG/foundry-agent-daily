@@ -17,7 +17,17 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Pin transitive dependency (via Microsoft.Identity.Web) to a patched version:
+         CVE-2026-84008 / GHSA-846f-f764-76mx (DoS, affected <= 10.0.12). -->
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.14" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\WebApp.ServiceDefaults\WebApp.ServiceDefaults.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="WebApp.Api.Tests" />
   </ItemGroup>
 
 </Project>

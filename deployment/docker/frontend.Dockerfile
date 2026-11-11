@@ -5,7 +5,11 @@ FROM node:22-alpine AS frontend-builder
 ARG ENTRA_SPA_CLIENT_ID
 ARG ENTRA_TENANT_ID
 ARG ENTRA_BACKEND_CLIENT_ID=""
-ARG APPLICATIONINSIGHTS_FRONTEND_CONNECTION_STRING=""
+# Browser Application Insights connection string, Base64 (UTF-8) encoded. Base64 is NOT a secrecy
+# measure: the value ends up in the JavaScript bundle on purpose (the browser SDK needs it). It only
+# avoids quoting/parsing problems with ';', '/', '=' and 'https://' across PowerShell/Git Bash,
+# Azure CLI, ACR Tasks and the build shell. Decoded only inside the `npm run build` RUN below.
+ARG APPLICATIONINSIGHTS_FRONTEND_CONNECTION_STRING_B64=""
 
 WORKDIR /app/frontend
 
@@ -23,11 +27,31 @@ ENV NODE_ENV=production
 ENV VITE_ENTRA_SPA_CLIENT_ID=$ENTRA_SPA_CLIENT_ID
 ENV VITE_ENTRA_TENANT_ID=$ENTRA_TENANT_ID
 ENV VITE_ENTRA_BACKEND_CLIENT_ID=$ENTRA_BACKEND_CLIENT_ID
-ENV VITE_APPLICATIONINSIGHTS_CONNECTION_STRING=$APPLICATIONINSIGHTS_FRONTEND_CONNECTION_STRING
 # Don't set VITE_API_URL - will default to "/api" (same origin)
 
-# Build the frontend
-RUN npm run build
+# Build the frontend.
+# The App Insights connection string is required: an empty, malformed or non-connection-string value
+# fails the build (messages never include the value). It is decoded in this RUN only and handed
+# exclusively to the npm/Vite process as VITE_APPLICATIONINSIGHTS_CONNECTION_STRING: no ENV, no file,
+# nothing in the final image except the bundle. printf '%s' avoids adding a newline; `base64 -d` is
+# the BusyBox applet included in node:*-alpine.
+RUN set -eu; \
+    b64="$APPLICATIONINSIGHTS_FRONTEND_CONNECTION_STRING_B64"; \
+    if [ -z "$b64" ]; then \
+      echo "ERROR: APPLICATIONINSIGHTS_FRONTEND_CONNECTION_STRING_B64 is required (Base64 of the frontend Application Insights connection string)." >&2; exit 1; \
+    fi; \
+    case "$b64" in *[!A-Za-z0-9+/=]*) \
+      echo "ERROR: APPLICATIONINSIGHTS_FRONTEND_CONNECTION_STRING_B64 is not valid Base64 (unexpected characters)." >&2; exit 1;; \
+    esac; \
+    if [ $(( ${#b64} % 4 )) -ne 0 ]; then \
+      echo "ERROR: APPLICATIONINSIGHTS_FRONTEND_CONNECTION_STRING_B64 is not valid Base64 (length)." >&2; exit 1; \
+    fi; \
+    decoded="$(printf '%s' "$b64" | base64 -d 2>/dev/null)" || { \
+      echo "ERROR: APPLICATIONINSIGHTS_FRONTEND_CONNECTION_STRING_B64 could not be decoded." >&2; exit 1; }; \
+    case "$decoded" in *InstrumentationKey=*) ;; *) \
+      echo "ERROR: APPLICATIONINSIGHTS_FRONTEND_CONNECTION_STRING_B64 does not decode to an Application Insights connection string." >&2; exit 1;; \
+    esac; \
+    VITE_APPLICATIONINSIGHTS_CONNECTION_STRING="$decoded" npm run build
 
 # Stage 2: Build .NET API Backend
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS backend-builder

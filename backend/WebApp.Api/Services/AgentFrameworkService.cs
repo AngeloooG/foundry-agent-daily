@@ -7,9 +7,12 @@ using OpenAI.Files;
 using OpenAI.Responses;
 using Microsoft.Identity.Client;
 using Microsoft.Identity.Web;
+using System.ClientModel;
 using System.Runtime.CompilerServices;
 using System.Text;
+using WebApp.Api.Infrastructure;
 using WebApp.Api.Models;
+using WebApp.Api.Security;
 
 namespace WebApp.Api.Services;
 
@@ -23,8 +26,11 @@ namespace WebApp.Api.Services;
 /// metadata and ProjectResponsesClient for streaming (required for annotations, MCP approvals).
 /// See .github/skills/researching-azure-ai-sdk/SKILL.md for SDK patterns.
 /// </remarks>
-public class AgentFrameworkService : IDisposable
+public class AgentFrameworkService : IAgentFrameworkService, IConversationOwnershipStore, IDisposable
 {
+    /// <summary>Upper bound of conversations scanned when listing (ownership is filtered app-side).</summary>
+    internal const int MaxConversationsScanned = 500;
+
     private readonly string _agentEndpoint;
     private readonly string _agentId;
     /// <summary>
@@ -37,7 +43,6 @@ public class AgentFrameworkService : IDisposable
     /// </summary>
     private readonly string? _configuredAgentVersion;
     private readonly ILogger<AgentFrameworkService> _logger;
-    private readonly ConversationStore _conversationStore;
     private readonly IHttpContextAccessor? _httpContextAccessor;
     private readonly string? _backendClientId;
     private readonly string? _tenantId;
@@ -55,8 +60,9 @@ public class AgentFrameworkService : IDisposable
     private readonly IHttpClientFactory _httpClientFactory;
 
     /// <summary>
-    /// Prefix applied to image files this web app uploads to the Foundry Files API,
-    /// used by the cleanup endpoint to scope deletes to files owned by this app.
+    /// Prefix applied to image files this web app uploads to the Foundry Files API, so they can be
+    /// told apart from other files in the shared Foundry project (retention is an operational task;
+    /// there is no public cleanup endpoint).
     /// </summary>
     public const string WebAppUploadFilenamePrefix = "webapp-upload-";
 
@@ -74,7 +80,6 @@ public class AgentFrameworkService : IDisposable
         _logger = logger;
         _httpClientFactory = httpClientFactory;
         _httpContextAccessor = httpContextAccessor;
-        _conversationStore = new ConversationStore();
 
         _agentEndpoint = configuration["AI_AGENT_ENDPOINT"]
             ?? throw new InvalidOperationException("AI_AGENT_ENDPOINT is not configured");
@@ -311,19 +316,18 @@ public class AgentFrameworkService : IDisposable
     public async IAsyncEnumerable<StreamChunk> StreamMessageAsync(
         string conversationId,
         string message,
-        List<string>? imageDataUris = null,
-        List<FileAttachment>? fileDataUris = null,
-        string? previousResponseId = null,
+        PreparedAttachments attachments,
         McpApprovalResponse? mcpApproval = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         _logger.LogInformation(
-            "Streaming message to conversation: {ConversationId}, ImageCount: {ImageCount}, FileCount: {FileCount}, HasApproval: {HasApproval}",
+            "Streaming message to conversation: {ConversationId}, Images: {ImageCount}, Texts: {TextCount}, Pdfs: {PdfCount}, HasApproval: {HasApproval}",
             conversationId,
-            imageDataUris?.Count ?? 0,
-            fileDataUris?.Count ?? 0,
+            attachments.Images.Count,
+            attachments.InlineTexts.Count,
+            attachments.Pdfs.Count,
             mcpApproval != null);
 
         CreateResponseOptions options = new() { StreamingEnabled = true };
@@ -341,7 +345,7 @@ public class AgentFrameworkService : IDisposable
         // If continuing from MCP approval, add approval response items
         // Don't set PreviousResponseId — the API rejects it with conversation binding,
         // and the conversation already tracks the pending MCP state
-        if (!string.IsNullOrEmpty(previousResponseId) && mcpApproval != null)
+        if (mcpApproval != null)
         {
             options.InputItems.Add(ResponseItem.CreateMcpApprovalResponseItem(
                 mcpApproval.ApprovalRequestId,
@@ -360,24 +364,13 @@ public class AgentFrameworkService : IDisposable
                 throw new ArgumentException("Message cannot be null or whitespace", nameof(message));
             }
 
-            // Build user message with optional images and files
-            ResponseItem userMessage = await BuildUserMessageAsync(message, imageDataUris, fileDataUris, cancellationToken);
+            // Build user message with optional (already validated) images and files
+            ResponseItem userMessage = await BuildUserMessageAsync(message, attachments, cancellationToken);
             options.InputItems.Add(userMessage);
-        }
-
-        _conversationStore.EnsureConversation(conversationId, message);
-        if (!string.IsNullOrEmpty(previousResponseId) && mcpApproval != null)
-        {
-            _logger.LogInformation("Skipping user message persistence for MCP approval resume conversation {ConversationId}", conversationId);
-        }
-        else if (!string.IsNullOrWhiteSpace(message))
-        {
-            _conversationStore.AddMessage(conversationId, "user", message);
         }
 
         // Dictionary to collect file search results for quote extraction
         var fileSearchQuotes = new Dictionary<string, string>();
-        var assistantText = new StringBuilder();
         // Track the current response ID for MCP approval resume flow
         string? currentResponseId = null;
 
@@ -396,7 +389,6 @@ public class AgentFrameworkService : IDisposable
 
             if (update is StreamingResponseOutputTextDeltaUpdate deltaUpdate)
             {
-                assistantText.Append(deltaUpdate.Delta);
                 yield return StreamChunk.Text(deltaUpdate.Delta);
             }
             else if (update is StreamingResponseOutputItemDoneUpdate itemDoneUpdate)
@@ -481,271 +473,70 @@ public class AgentFrameworkService : IDisposable
             }
         }
 
-        if (assistantText.Length > 0)
-        {
-            _conversationStore.AddMessage(conversationId, "assistant", assistantText.ToString());
-        }
-
         _logger.LogInformation("Completed streaming for conversation: {ConversationId}", conversationId);
     }
 
     /// <summary>
-    /// Supported image MIME types for vision capabilities.
-    /// </summary>
-    private static readonly HashSet<string> AllowedImageTypes = 
-        ["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp"];
-
-    /// <summary>
-    /// Supported document MIME types for file input.
-    /// Note: Office documents (docx, pptx, xlsx) are NOT supported - they cannot be parsed.
-    /// </summary>
-    private static readonly HashSet<string> AllowedDocumentTypes = 
-        [
-            "application/pdf",
-            "text/plain",
-            "text/markdown",
-            "text/csv",
-            "application/json",
-            "text/html",
-            "application/xml",
-            "text/xml"
-        ];
-
-    /// <summary>
-    /// Text-based document MIME types that should be inlined as text rather than sent as file input.
-    /// The Responses API only supports PDF for CreateInputFilePart.
-    /// </summary>
-    private static readonly HashSet<string> TextBasedDocumentTypes = 
-        [
-            "text/plain",
-            "text/markdown",
-            "text/csv",
-            "application/json",
-            "text/html",
-            "application/xml",
-            "text/xml"
-        ];
-
-    /// <summary>
-    /// MIME types that can be sent as file input (only PDF is currently supported by Responses API).
-    /// </summary>
-    private static readonly HashSet<string> FileInputTypes = 
-        [
-            "application/pdf"
-        ];
-
-    /// <summary>
-    /// Maximum number of images per message.
-    /// </summary>
-    private const int MaxImageCount = 5;
-
-    /// <summary>
-    /// Maximum number of files per message.
-    /// </summary>
-    private const int MaxFileCount = 10;
-
-    /// <summary>
-    /// Maximum size per image in bytes (5MB).
-    /// </summary>
-    private const long MaxImageSizeBytes = 5 * 1024 * 1024;
-
-    /// <summary>
-    /// Maximum size per document file in bytes (20MB).
-    /// </summary>
-    private const long MaxFileSizeBytes = 20 * 1024 * 1024;
-
-    /// <summary>
-    /// Builds a ResponseItem for the user message with optional image and file attachments.
-    /// Validates count, size, MIME type, and Base64 format. Image bytes are uploaded to the
-    /// Foundry Files API (purpose: assistants) and referenced by file id.
+    /// Builds the user message from attachments already validated by <see cref="AttachmentProcessor"/>
+    /// (validation happens in the endpoint, before any conversation is created or file uploaded).
+    /// Images are uploaded to the Foundry Files API (purpose: assistants) and referenced by id; if an
+    /// upload fails, images already uploaded for this message are deleted (no orphans).
     /// </summary>
     private async Task<ResponseItem> BuildUserMessageAsync(
         string message,
-        List<string>? imageDataUris,
-        List<FileAttachment>? fileDataUris,
+        PreparedAttachments attachments,
         CancellationToken cancellationToken)
     {
-        if ((imageDataUris == null || imageDataUris.Count == 0) && 
-            (fileDataUris == null || fileDataUris.Count == 0))
+        if (attachments.IsEmpty)
         {
             return ResponseItem.CreateUserMessageItem(message);
         }
 
-        var contentParts = new List<ResponseContentPart>
+        var contentParts = new List<ResponseContentPart> { ResponseContentPart.CreateInputTextPart(message) };
+        contentParts.AddRange(attachments.InlineTexts.Select(ResponseContentPart.CreateInputTextPart));
+
+        // Foundry's Files proxy only accepts purpose=assistants for images used with CreateInputImagePart.
+        var fileClient = GetProjectClient().ProjectOpenAIClient.GetOpenAIFileClient();
+        var uploadedIds = new List<string>();
+        try
         {
-            ResponseContentPart.CreateInputTextPart(message)
-        };
-
-        var errors = new List<string>();
-
-        // Process images
-        if (imageDataUris != null && imageDataUris.Count > 0)
-        {
-            // Enforce maximum image count
-            if (imageDataUris.Count > MaxImageCount)
+            foreach (var image in attachments.Images)
             {
-                throw new ArgumentException(
-                    $"Invalid image attachments: Too many images ({imageDataUris.Count}), maximum {MaxImageCount} allowed");
-            }
-
-            for (int i = 0; i < imageDataUris.Count; i++)
-            {
-                var label = $"Image {i + 1}";
-
-                if (!TryParseDataUri(imageDataUris[i], out var mediaType, out var bytes, out var parseError))
-                {
-                    errors.Add($"{label}: {parseError}");
-                    continue;
-                }
-
-                if (!AllowedImageTypes.Contains(mediaType))
-                {
-                    errors.Add($"{label}: Unsupported type '{mediaType}'. Allowed: PNG, JPEG, GIF, WebP");
-                    continue;
-                }
-
-                if (bytes.Length > MaxImageSizeBytes)
-                {
-                    var sizeMB = bytes.Length / (1024.0 * 1024.0);
-                    errors.Add($"{label}: Size {sizeMB:F1}MB exceeds maximum 5MB");
-                    continue;
-                }
-
-                // Upload image bytes via the OpenAI Files API and reference the returned file id.
-                // Foundry's Files proxy rejects purpose=vision/user_data with "Invalid file ContentType";
-                // purpose=assistants is the accepted path and the resulting file id works with
-                // CreateInputImagePart on the Responses API.
-                var fileClient = GetProjectClient().ProjectOpenAIClient.GetOpenAIFileClient();
-                var extension = mediaType switch
+                var extension = image.MediaType switch
                 {
                     "image/png" => ".png",
-                    "image/jpeg" => ".jpg",
+                    "image/jpeg" or "image/jpg" => ".jpg",
                     "image/gif" => ".gif",
                     "image/webp" => ".webp",
                     _ => ".bin",
                 };
-                // Prefix uploaded filenames so the cleanup endpoint can identify files uploaded
-                // by this web app versus other files in the shared Foundry project.
                 var imageFileName = $"{WebAppUploadFilenamePrefix}{Guid.NewGuid():N}{extension}";
-                using var imageStream = new MemoryStream(bytes);
-                // Azure Foundry Files API only accepts purpose = assistants | batch | fine-tune | evals.
-                // Use purpose=assistants per Azure Responses API docs.
-                // See: learn.microsoft.com/azure/foundry/openai/how-to/responses#file-input
-                var uploaded = await fileClient.UploadFileAsync(
-                    imageStream,
-                    imageFileName,
-                    FileUploadPurpose.Assistants,
-                    cancellationToken);
+                using var imageStream = new MemoryStream(image.Bytes, writable: false);
+                var uploaded = await fileClient.UploadFileAsync(imageStream, imageFileName, FileUploadPurpose.Assistants, cancellationToken);
+                uploadedIds.Add(uploaded.Value.Id);
                 contentParts.Add(ResponseContentPart.CreateInputImagePart(uploaded.Value.Id));
             }
         }
-
-        // Process file attachments
-        if (fileDataUris != null && fileDataUris.Count > 0)
+        catch
         {
-            // Enforce maximum file count
-            if (fileDataUris.Count > MaxFileCount)
+            foreach (var id in uploadedIds)
             {
-                throw new ArgumentException(
-                    $"Invalid file attachments: Too many files ({fileDataUris.Count}), maximum {MaxFileCount} allowed");
-            }
-
-            for (int i = 0; i < fileDataUris.Count; i++)
-            {
-                var file = fileDataUris[i];
-                var label = $"File {i + 1} ({file.FileName})";
-
-                if (!TryParseDataUri(file.DataUri, out var mediaType, out var bytes, out var parseError))
+                try
                 {
-                    errors.Add($"{label}: {parseError}");
-                    continue;
+                    await fileClient.DeleteFileAsync(id, CancellationToken.None);
                 }
-
-                if (!AllowedDocumentTypes.Contains(mediaType))
+                catch (Exception deleteEx)
                 {
-                    errors.Add($"{label}: Unsupported type '{mediaType}'");
-                    continue;
-                }
-
-                // Verify MIME type matches what was declared
-                if (!string.Equals(mediaType, file.MimeType.ToLowerInvariant(), StringComparison.OrdinalIgnoreCase))
-                {
-                    errors.Add($"{label}: MIME type mismatch (declared: {file.MimeType}, detected: {mediaType})");
-                    continue;
-                }
-
-                if (bytes.Length > MaxFileSizeBytes)
-                {
-                    var sizeMB = bytes.Length / (1024.0 * 1024.0);
-                    errors.Add($"{label}: Size {sizeMB:F1}MB exceeds maximum 20MB");
-                    continue;
-                }
-
-                // Handle text-based files by inlining their content
-                // The Responses API only supports PDF for CreateInputFilePart
-                if (TextBasedDocumentTypes.Contains(mediaType))
-                {
-                    var textContent = System.Text.Encoding.UTF8.GetString(bytes);
-                    var inlineText = $"\n\n--- Content of {file.FileName} ---\n{textContent}\n--- End of {file.FileName} ---\n";
-                    contentParts.Add(ResponseContentPart.CreateInputTextPart(inlineText));
-                }
-                else if (FileInputTypes.Contains(mediaType))
-                {
-                    contentParts.Add(ResponseContentPart.CreateInputFilePart(
-                        BinaryData.FromBytes(bytes),
-                        mediaType,
-                        file.FileName));
+                    _logger.LogWarning(deleteEx, "Could not delete orphaned upload {FileId}", id);
                 }
             }
+            throw;
         }
 
-        if (errors.Count > 0)
-        {
-            throw new ArgumentException($"Invalid attachments: {string.Join("; ", errors)}");
-        }
+        contentParts.AddRange(attachments.Pdfs.Select(pdf =>
+            ResponseContentPart.CreateInputFilePart(BinaryData.FromBytes(pdf.Bytes), pdf.MediaType, pdf.FileName)));
 
         return ResponseItem.CreateUserMessageItem(contentParts);
-    }
-
-    /// <summary>
-    /// Parses a data URI into its media type and decoded bytes.
-    /// </summary>
-    /// <returns>true if parsing succeeded; false with an error message otherwise.</returns>
-    private static bool TryParseDataUri(string dataUri, out string mediaType, out byte[] bytes, out string error)
-    {
-        mediaType = string.Empty;
-        bytes = Array.Empty<byte>();
-        error = string.Empty;
-
-        if (!dataUri.StartsWith("data:"))
-        {
-            error = "Invalid format (must be data URI)";
-            return false;
-        }
-
-        var semiIndex = dataUri.IndexOf(';');
-        var commaIndex = dataUri.IndexOf(',');
-
-        if (semiIndex < 0 || commaIndex < 0 || commaIndex < semiIndex)
-        {
-            error = "Malformed data URI";
-            return false;
-        }
-
-        mediaType = dataUri[5..semiIndex].ToLowerInvariant();
-
-        var base64Data = dataUri[(commaIndex + 1)..];
-        try
-        {
-            bytes = Convert.FromBase64String(base64Data);
-        }
-        catch (FormatException)
-        {
-            error = "Invalid Base64 encoding";
-            return false;
-        }
-
-        return true;
     }
 
     /// <summary>
@@ -821,112 +612,112 @@ public class AgentFrameworkService : IDisposable
     }
 
     /// <summary>
-    /// Create a new conversation for the agent.
-    /// Uses ProjectConversation from Azure.AI.Projects for server-managed state.
+    /// Create a new conversation owned by <paramref name="ownerKey"/> (stored in Foundry metadata).
+    /// Foundry failures propagate: there is no local fallback (the previous in-process store never
+    /// persisted across requests and returned ids that Foundry did not know).
     /// </summary>
-    public async Task<string> CreateConversationAsync(string? firstMessage = null, CancellationToken cancellationToken = default)
+    public async Task<string> CreateConversationAsync(string ownerKey, string? firstMessage = null, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        try
+        var conversationOptions = new ProjectConversationCreationOptions();
+        foreach (var (key, value) in ConversationMetadata.ForNewConversation(ownerKey, firstMessage))
         {
-            _logger.LogInformation("Creating new conversation");
-            
-            ProjectConversationCreationOptions conversationOptions = new();
-
-            if (!string.IsNullOrEmpty(firstMessage))
-            {
-                // Store title in metadata (truncate to 50 chars)
-                var title = firstMessage.Length > 50 
-                    ? firstMessage[..50] + "..."
-                    : firstMessage;
-                conversationOptions.Metadata["title"] = title;
-            }
-
-            try
-            {
-                ProjectConversation conversation
-                    = await GetProjectClient().ProjectOpenAIClient.GetProjectConversationsClient().CreateProjectConversationAsync(
-                        conversationOptions,
-                        cancellationToken);
-
-                _conversationStore.EnsureConversation(conversation.Id, firstMessage);
-
-                _logger.LogInformation(
-                    "Created conversation: {ConversationId}",
-                    conversation.Id);
-                return conversation.Id;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Foundry conversation creation failed; using in-process fallback conversation store");
-                return _conversationStore.CreateConversation(firstMessage);
-            }
+            conversationOptions.Metadata[key] = value;
         }
-        catch (OperationCanceledException)
-        {
-            _logger.LogWarning("Conversation creation was cancelled");
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to create conversation");
-            throw;
-        }
+
+        ProjectConversation conversation = await Conversations.CreateProjectConversationAsync(conversationOptions, cancellationToken);
+        _logger.LogInformation("Created conversation: {ConversationId}", conversation.Id);
+        return conversation.Id;
     }
 
     /// <summary>
-    /// List conversations for the current agent.
+    /// List the caller's conversations for the current agent version. Ownership is filtered here
+    /// (Foundry cannot filter by metadata); at most <see cref="MaxConversationsScanned"/> are scanned.
+    /// Returns up to limit+1 items so the caller can detect another page.
     /// </summary>
-    public async Task<List<ConversationSummary>> ListConversationsAsync(int limit = 20, CancellationToken cancellationToken = default)
+    public async Task<List<ConversationSummary>> ListConversationsAsync(string ownerKey, int limit = 20, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
+        var resolvedAgent = await GetAgentAsync(cancellationToken);
+        var resolvedVersion = _configuredAgentVersion ?? resolvedAgent.Version;
+
+        var conversations = new List<ConversationSummary>();
+        var scanned = 0;
+        await foreach (var conv in Conversations.GetProjectConversationsAsync(
+            new AgentReference(_agentId, resolvedVersion), cancellationToken: cancellationToken))
+        {
+            if (++scanned > MaxConversationsScanned)
+                break;
+
+            if (conv.Metadata is null
+                || !conv.Metadata.TryGetValue(ConversationMetadata.OwnerKey, out var owner)
+                || !ConversationMetadata.KeysMatch(owner, ownerKey))
+                continue;
+
+            conversations.Add(new ConversationSummary
+            {
+                Id = conv.Id,
+                Title = conv.Metadata.TryGetValue(ConversationMetadata.TitleKey, out var title) ? title : null,
+                CreatedAt = conv.CreatedAt.ToUnixTimeSeconds()
+            });
+
+            if (conversations.Count > limit)
+                break;
+        }
+
+        return conversations;
+    }
+
+    private ProjectConversationsClient Conversations =>
+        GetProjectClient().ProjectOpenAIClient.GetProjectConversationsClient();
+
+    // ===== IConversationOwnershipStore (Foundry conversation metadata) =====
+
+    public async Task<string?> GetOwnerAsync(string conversationId, CancellationToken cancellationToken)
+    {
+        var metadata = await GetMetadataAsync(conversationId, cancellationToken);
+        return metadata is not null && metadata.TryGetValue(ConversationMetadata.OwnerKey, out var owner) ? owner : null;
+    }
+
+    public async Task AddAuthorizedFilesAsync(string conversationId, IReadOnlyCollection<AuthorizedFile> files, CancellationToken cancellationToken)
+    {
+        if (files.Count == 0)
+            return;
+
+        var current = await GetMetadataAsync(conversationId, cancellationToken)
+            ?? throw new InvalidOperationException("Conversation not found while recording authorized files.");
+
+        // Update replaces the whole metadata dictionary: merge to keep owner and title.
+        var options = new ProjectConversationUpdateOptions();
+        foreach (var (key, value) in ConversationMetadata.WithFiles(current, files))
+        {
+            options.Metadata[key] = value;
+        }
+
+        await Conversations.UpdateProjectConversationAsync(conversationId, options, cancellationToken);
+    }
+
+    public async Task<bool> IsFileAuthorizedAsync(string conversationId, string fileId, string? containerId, CancellationToken cancellationToken)
+    {
+        var metadata = await GetMetadataAsync(conversationId, cancellationToken);
+        return metadata is not null && ConversationMetadata.ContainsFile(metadata, fileId, containerId);
+    }
+
+    /// <summary>Conversation metadata, or null when Foundry reports the conversation does not exist.</summary>
+    private async Task<IReadOnlyDictionary<string, string>?> GetMetadataAsync(string conversationId, CancellationToken cancellationToken)
+    {
         try
         {
-            _logger.LogInformation("Listing conversations (limit={Limit})", limit);
-
-            try
-            {
-                // Pin to the same resolved version metadata/streaming use.
-                var resolvedAgent = await GetAgentAsync(cancellationToken);
-                var resolvedVersion = _configuredAgentVersion ?? resolvedAgent.Version;
-
-                var conversations = new List<ConversationSummary>();
-                // Fetch limit+1 to detect if more conversations exist beyond the requested page
-                var fetchLimit = limit + 1;
-                await foreach (var conv in GetProjectClient().ProjectOpenAIClient.GetProjectConversationsClient().GetProjectConversationsAsync(
-                    new AgentReference(_agentId, resolvedVersion), cancellationToken: cancellationToken))
-                {
-                    conversations.Add(new ConversationSummary
-                    {
-                        Id = conv.Id,
-                        Title = conv.Metadata?.TryGetValue("title", out var title) == true ? title : null,
-                        CreatedAt = conv.CreatedAt.ToUnixTimeSeconds()
-                    });
-
-                    if (conversations.Count >= fetchLimit)
-                        break;
-                }
-
-                if (conversations.Count > 0)
-                {
-                    _logger.LogInformation("Found {Count} conversations", conversations.Count);
-                    return conversations;
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Foundry conversation listing failed; using in-process fallback conversation store");
-            }
-
-            var fallbackConversations = _conversationStore.ListConversations();
-            return fallbackConversations.Take(limit).ToList();
+            ProjectConversation conversation = await Conversations.GetProjectConversationAsync(conversationId, cancellationToken);
+            return conversation.Metadata is null
+                ? new Dictionary<string, string>()
+                : new Dictionary<string, string>(conversation.Metadata);
         }
-        catch (Exception ex)
+        catch (ClientResultException ex) when (ex.Status == 404)
         {
-            _logger.LogError(ex, "Failed to list conversations");
-            throw;
+            return null;
         }
     }
 
@@ -939,53 +730,25 @@ public class AgentFrameworkService : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        try
+        var messages = new List<ConversationMessageInfo>();
+
+        // Filter to message items only
+        await foreach (var item in Conversations.GetProjectConversationItemsAsync(
+            conversationId, itemKind: AgentResponseItemKind.Message, cancellationToken: cancellationToken))
         {
-            _logger.LogInformation("Getting messages for conversation: {ConversationId}", conversationId);
-
-            try
+            if (item.AsResponseResultItem() is MessageResponseItem messageItem)
             {
-                var messages = new List<ConversationMessageInfo>();
-
-                // Filter to message items only
-                await foreach (var item in GetProjectClient().ProjectOpenAIClient.GetProjectConversationsClient().GetProjectConversationItemsAsync(
-                    conversationId, itemKind: AgentResponseItemKind.Message, cancellationToken: cancellationToken))
+                messages.Add(new ConversationMessageInfo
                 {
-                    var responseItem = item.AsResponseResultItem();
-                    if (responseItem is MessageResponseItem messageItem)
-                    {
-                        var content = string.Join("", messageItem.Content
-                            .Where(c => c.Text != null)
-                            .Select(c => c.Text));
-
-                        messages.Add(new ConversationMessageInfo
-                        {
-                            Role = messageItem.Role.ToString().ToLowerInvariant(),
-                            Content = content
-                        });
-                    }
-                }
-
-                if (messages.Count > 0)
-                {
-                    _logger.LogInformation("Found {Count} messages in conversation {ConversationId}", messages.Count, conversationId);
-                    messages.Reverse();
-                    return messages;
-                }
+                    Role = messageItem.Role.ToString().ToLowerInvariant(),
+                    Content = string.Join("", messageItem.Content.Where(c => c.Text != null).Select(c => c.Text))
+                });
             }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Foundry conversation message listing failed; using in-process fallback conversation store for {ConversationId}", conversationId);
-            }
+        }
 
-            var fallbackMessages = _conversationStore.GetMessages(conversationId);
-            return fallbackMessages;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to get messages for conversation: {ConversationId}", conversationId);
-            throw;
-        }
+        // Items are returned newest first; the UI expects chronological order.
+        messages.Reverse();
+        return messages;
     }
 
     /// <summary>
@@ -1010,13 +773,16 @@ public class AgentFrameworkService : IDisposable
     }
 
     /// <summary>
-    /// Download a file generated by code interpreter or other tools.
+    /// Download a file generated by code interpreter or other tools, up to <paramref name="maxBytes"/>.
     /// Container files (with containerId) use the REST API: GET /openai/v1/containers/{containerId}/files/{fileId}/content.
     /// Standard files use the OpenAI FileClient.
     /// </summary>
+    /// <exception cref="FileTooLargeException">The file exceeds <paramref name="maxBytes"/>. When the size is known
+    /// beforehand (file metadata or Content-Length) the content is never downloaded.</exception>
     public async Task<(BinaryData Content, string FileName)> DownloadFileAsync(
         string fileId,
-        string? containerId = null,
+        string? containerId,
+        long maxBytes,
         CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -1025,17 +791,29 @@ public class AgentFrameworkService : IDisposable
         {
             if (!string.IsNullOrEmpty(containerId))
             {
-                return await DownloadContainerFileAsync(fileId, containerId, cancellationToken);
+                return await DownloadContainerFileAsync(fileId, containerId, maxBytes, cancellationToken);
             }
 
             _logger.LogInformation("Downloading standard file: {FileId}", fileId);
             var fileClient = GetProjectClient().ProjectOpenAIClient.GetOpenAIFileClient();
-            var fileContent = await fileClient.DownloadFileAsync(fileId, cancellationToken);
+
+            // Metadata first: a file already known to be too large is never downloaded.
             var fileInfo = await fileClient.GetFileAsync(fileId, cancellationToken);
+            DownloadLimits.EnsureWithinLimit(fileInfo.Value?.SizeInBytesLong, maxBytes);
+
+            var fileContent = await fileClient.DownloadFileAsync(fileId, cancellationToken);
+            // Defensive: the metadata size may be missing.
+            DownloadLimits.EnsureWithinLimit(fileContent.Value.ToMemory().Length, maxBytes);
+
             var fileName = fileInfo.Value?.Filename ?? $"{fileId}.bin";
             _logger.LogInformation("Downloaded file: {FileId}, Name: {FileName}, Size: {Size} bytes",
                 fileId, fileName, fileContent.Value.ToMemory().Length);
             return (fileContent.Value, fileName);
+        }
+        catch (FileTooLargeException)
+        {
+            _logger.LogWarning("File {FileId} exceeds the maximum download size ({MaxBytes} bytes)", fileId, maxBytes);
+            throw;
         }
         catch (Exception ex)
         {
@@ -1051,6 +829,7 @@ public class AgentFrameworkService : IDisposable
     private async Task<(BinaryData Content, string FileName)> DownloadContainerFileAsync(
         string fileId,
         string containerId,
+        long maxBytes,
         CancellationToken cancellationToken)
     {
         _logger.LogInformation("Downloading container file: {FileId} from container: {ContainerId}", fileId, containerId);
@@ -1075,10 +854,17 @@ public class AgentFrameworkService : IDisposable
         using var request = new HttpRequestMessage(HttpMethod.Get, requestUrl);
         request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken.Token);
 
-        var response = await httpClient.SendAsync(request, cancellationToken);
+        // Headers first: the body is only read when it fits in the limit.
+        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         response.EnsureSuccessStatusCode();
+        DownloadLimits.EnsureWithinLimit(response.Content.Headers.ContentLength, maxBytes);
 
-        var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+        byte[] bytes;
+        await using (var body = await response.Content.ReadAsStreamAsync(cancellationToken))
+        {
+            // Without Content-Length, stop reading one byte past the limit.
+            bytes = await DownloadLimits.ReadBoundedAsync(body, maxBytes, cancellationToken);
+        }
 
         // Try to extract filename from Content-Disposition header, fall back to fileId
         var fileName = $"{fileId}.bin";
@@ -1125,12 +911,23 @@ public class AgentFrameworkService : IDisposable
             Name = agentVersion.Name ?? "AI Assistant",
             Description = agentVersion.Description,
             Model = definition?.Model ?? string.Empty,
-            Instructions = definition?.Instructions ?? string.Empty,
-            Metadata = metadata,
+            // Never the instructions (system prompt); only allowlisted metadata keys.
+            Metadata = FilterPublicMetadata(metadata),
             StarterPrompts = starterPrompts
         };
 
         return s_cachedMetadata;
+    }
+
+    /// <summary>Agent metadata keys that are safe to return to every signed-in user.</summary>
+    internal static readonly IReadOnlySet<string> PublicMetadataKeys = new HashSet<string>(StringComparer.Ordinal) { "logo" };
+
+    internal static Dictionary<string, string>? FilterPublicMetadata(IReadOnlyDictionary<string, string>? metadata)
+    {
+        var filtered = metadata?
+            .Where(kvp => PublicMetadataKeys.Contains(kvp.Key))
+            .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+        return filtered is { Count: > 0 } ? filtered : null;
     }
 
     /// <summary>
@@ -1182,79 +979,6 @@ public class AgentFrameworkService : IDisposable
     /// </summary>
     public (int InputTokens, int OutputTokens, int TotalTokens)? GetLastUsage() =>
         _lastUsage is null ? null : (_lastUsage.InputTokenCount, _lastUsage.OutputTokenCount, _lastUsage.TotalTokenCount);
-
-    /// <summary>
-    /// Returns a count and total byte size of files uploaded by this web app (identified by
-    /// filename prefix <see cref="WebAppUploadFilenamePrefix"/>) that are still stored in the
-    /// Foundry project. Uses <see cref="FilePurpose.Assistants"/> because that is the purpose
-    /// under which <see cref="BuildUserMessageAsync"/> stores image uploads.
-    /// </summary>
-    public async Task<UploadedFilesInfo> ListUploadedFilesAsync(CancellationToken cancellationToken = default)
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-
-        var fileClient = GetProjectClient().ProjectOpenAIClient.GetOpenAIFileClient();
-        var result = await fileClient.GetFilesAsync(FilePurpose.Assistants, cancellationToken);
-
-        int count = 0;
-        long totalBytes = 0;
-        foreach (var file in result.Value)
-        {
-            if (file.Filename != null && file.Filename.StartsWith(WebAppUploadFilenamePrefix, StringComparison.Ordinal))
-            {
-                count++;
-                totalBytes += file.SizeInBytesLong ?? file.SizeInBytes ?? 0;
-            }
-        }
-
-        _logger.LogInformation("ListUploadedFiles: {Count} files, {TotalBytes} bytes", count, totalBytes);
-        return new UploadedFilesInfo(count, totalBytes);
-    }
-
-    /// <summary>
-    /// Deletes every file in the Foundry project whose filename begins with
-    /// <see cref="WebAppUploadFilenamePrefix"/>. Intended as a user-triggered cleanup
-    /// because the GA Files API does not expose <c>expires_after</c> on upload — see README
-    /// "Known limitations". Returns counts of successful and failed deletions; failures are
-    /// logged but do not abort the loop.
-    /// </summary>
-    public async Task<UploadedFilesCleanupResult> CleanupUploadedFilesAsync(CancellationToken cancellationToken = default)
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-
-        var fileClient = GetProjectClient().ProjectOpenAIClient.GetOpenAIFileClient();
-        var result = await fileClient.GetFilesAsync(FilePurpose.Assistants, cancellationToken);
-
-        int deleted = 0;
-        int failed = 0;
-        foreach (var file in result.Value)
-        {
-            if (file.Filename == null || !file.Filename.StartsWith(WebAppUploadFilenamePrefix, StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            try
-            {
-                await fileClient.DeleteFileAsync(file.Id, cancellationToken);
-                deleted++;
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                failed++;
-                _logger.LogWarning(ex, "Failed to delete uploaded file {FileId} ({FileName})", file.Id, file.Filename);
-            }
-        }
-
-        _logger.LogInformation("CleanupUploadedFiles: deleted={Deleted} failed={Failed}", deleted, failed);
-        return new UploadedFilesCleanupResult(deleted, failed);
-    }
 
     public void Dispose()
     {
