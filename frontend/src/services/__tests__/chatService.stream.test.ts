@@ -174,3 +174,30 @@ describe('attachments (Lote 4 target behavior)', () => {
   it.todo('Lote 4: links open with target=_blank rel="noopener noreferrer"; javascript:/file: blocked');
   it.todo('Lote 4: empty files are rejected');
 });
+
+describe('ChatService.downloadFile (lote 2 contract)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('sends the conversation id the backend uses to authorize the download', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(new Blob(['x']), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:x');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const service = new ChatService('/api', vi.fn().mockResolvedValue('token'), vi.fn());
+
+    await service.downloadFile('file 1', 'conv_1', 'a.csv', 'cntr_1');
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/files/file%201?conversationId=conv_1&containerId=cntr_1');
+  });
+
+  it('reports a failed download as an API error', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 404 })));
+    const service = new ChatService('/api', vi.fn().mockResolvedValue('token'), vi.fn());
+
+    await expect(service.downloadFile('f', 'conv_1')).rejects.toMatchObject({ code: 'API' });
+  });
+});
