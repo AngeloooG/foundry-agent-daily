@@ -93,4 +93,4 @@ Autenticación por **federación OIDC** de GitHub a una identidad dedicada, limi
 4. Search → cuenta de Foundry: **Cognitive Services OpenAI User**.
 5. Search → servidor SQL: **Reader**.
 
-AcrPull pertenece al IaC de la web app (`infra/main*.bicep`), que es donde está el ACR. El usuario contenido de SQL se crea con T-SQL ([`infra/platform/README.md`](../../infra/platform/README.md)).
+AcrPull pertenece al IaC de la web app (`infra/main*.bicep`), que es donde está el ACR. El usuario contenido de SQL se crea con T-SQL (`CREATE USER [<servicio-search>] FROM EXTERNAL PROVIDER` y `GRANT SELECT` solo sobre `dbo.vw_DailyConocimiento_Search`).

@@ -3,7 +3,7 @@
 > **NOT FOR CURRENT DEPLOYMENT.**
 > **Clasificación: FUTURE – ROADMAP / ADVANCED HARDENING.** Este documento no forma parte de la arquitectura vigente (`internal-minimal`, ver [lote-7-simplificado.md](lote-7-simplificado.md)) y **no es requisito previo de la producción interna**. Se conserva como diseño de referencia por si en el futuro se exige aislamiento de red. Algunas afirmaciones sobre niveles de Search que aparecen aquí se corrigen en el anexo H de lote-7-simplificado.md.
 
-**Requiere revisión senior** (red, identidad y RBAC). Nada de esto se ha desplegado. El Bicep correspondiente está en [`infra/platform/`](../../infra/platform/) (`enablePrivateNetworking = true` en `main.prod.bicepparam`).
+**Requiere revisión senior** (red, identidad y RBAC). Nada de esto se ha desplegado. El Bicep que acompañaba este diseño **no forma parte de esta rama**: se conserva únicamente como LEGACY / ARCHITECTURAL REFERENCE – DO NOT DEPLOY en el commit histórico [`a7daeaa`](https://github.com/AngeloooG/foundry-agent-daily/tree/a7daeaa/infra/platform).
 
 Fuentes revisadas en Microsoft Learn (2026-11-10):
 
@@ -94,7 +94,7 @@ Fuentes revisadas en Microsoft Learn (2026-11-10):
 | Basic | **No** | **No** | Válido para desarrollo con red pública (`main.dev.bicepparam`) |
 | S1 (creado después del 2024-04-03) | Sí | Sí | **Mínimo para producción privada** (`main.prod.bicepparam`: `standard`, 2 réplicas) |
 
-Con Basic en desarrollo, el indexador llega a SQL por red pública. Hay que añadir la IP de salida de Search como regla explícita en `sqlFirewallRules`, **nunca** `0.0.0.0`/`AllowAllWindowsAzureIps` (ver [`infra/platform/README.md`](../../infra/platform/README.md)).
+Con Basic en desarrollo, el indexador llega a SQL por red pública. Hay que añadir la IP de salida de Search como regla explícita en `sqlFirewallRules`, **nunca** `0.0.0.0`/`AllowAllWindowsAzureIps` (ver la corrección sobre el indexador en Basic en [lote-7-simplificado.md](lote-7-simplificado.md), sección 19).
 
 ### 3.5 Copilot Studio → Search (limitaciones, no se asume que funciona)
 

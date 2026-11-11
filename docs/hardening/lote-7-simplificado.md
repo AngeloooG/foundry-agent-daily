@@ -517,7 +517,7 @@ No se ha cambiado la cuota, no se ha creado ni modificado ningún despliegue y n
 | [README.md](README.md) | CURRENT (resumen y cuerpo del PR) |
 | [lote-0.md](lote-0.md) … [lote-6.md](lote-6.md) | CURRENT (registro) |
 | [red-privada.md](red-privada.md) | FUTURE – NOT FOR CURRENT DEPLOYMENT |
-| [lote-7.md](lote-7.md), [whatif/](whatif/README.md), [`infra/platform/`](../../infra/platform/README.md) | LEGACY - DO NOT DEPLOY |
+| [lote-7.md](lote-7.md), [whatif/](whatif/README.md), `infra/platform/` (no incluido en esta rama; solo como LEGACY / ARCHITECTURAL REFERENCE – DO NOT DEPLOY en el commit histórico [`a7daeaa`](https://github.com/AngeloooG/foundry-agent-daily/tree/a7daeaa/infra/platform)) | LEGACY - DO NOT DEPLOY |
 | `infra/README.md`, `infra/main.bicep` | CURRENT, con desalineación conocida (sin editar) |
 
 ## 19. Correcciones a entregables anteriores
