@@ -46,3 +46,41 @@ Convenciones: suscripción `b6d04525-e7b4-4b17-8492-2471f9779962`, grupo `rg-dai
 - **Prueba:** procedimiento de `verificacion-manual.md`, caso "renovación silenciosa".
 - **Impacto:** Copilot Studio, Search y Foundry, ninguno.
 - **Rollback:** desactivar las dos variables (la redirect URI extra puede quedar registrada sin efecto).
+
+## A5. Búsqueda híbrida semántica en el agente de Foundry
+
+- **Objetivo:** que el agente use el vectorizador y la configuración semántica del índice (hoy `query_type: simple`).
+- **Cambio:** en Foundry, nueva versión del agente `Daily-Enhanced` con la herramienta `azure_ai_search` en `query_type: vector_semantic_hybrid`. No cambia la versión que usa la web app hasta fijar `AI_AGENT_VERSION`.
+- **Comprobación previa:** `az rest --method get --resource https://ai.azure.com --url "https://prj-daily-enhanced-dev-resource.services.ai.azure.com/api/projects/prj-daily-enhanced-dev/agents/Daily-Enhanced/versions/10?api-version=v1" --query "definition.tools"`.
+- **Prueba:** mismo conjunto de 10–20 preguntas reales contra v10 y la nueva versión; comparar fuentes citadas y precisión.
+- **Impacto:** Copilot Studio y Search, ninguno; web app, solo al cambiar `AI_AGENT_VERSION`; coste, el de los embeddings de cada consulta (bajo).
+- **Rollback:** volver `AI_AGENT_VERSION` a 10.
+
+## A6. Copilot Studio: clave de consulta dedicada y fuente duplicada
+
+**Requiere revisión senior** (claves).
+
+- **Objetivo:** que Copilot Studio no use una clave temporal (posiblemente de administración) y eliminar la fuente de conocimiento duplicada con referencia rota.
+- **Cambio:** 1) En el portal de Search, crear la clave de consulta `daily-copilot-studio`. 2) En la conexión del conector Azure AI Search de Copilot Studio, sustituir la clave actual por la nueva. 3) Comprobar que el agente responde. 4) Eliminar la fuente de conocimiento duplicada (la de la referencia rota), tras exportar la solución.
+- **Comprobación previa:** identificar en el portal (Search → Keys) si la clave actual es de administración o de consulta, e inventariar quién más la usa (la conexión de Foundry `azureairesourceprueba2` usa también una clave: ver A1).
+- **Impacto:** Copilot Studio (reconfiguración de la conexión); web app y Foundry, ninguno.
+- **Rollback:** volver a la clave anterior en la conexión (no se rota ni se borra ninguna clave en esta acción).
+
+## A7. Ejecución del indexador a demanda y programación diaria
+
+- **Objetivo:** publicar el contenido nuevo en minutos sin impedir la pausa automática de SQL (ver lote 6, 3.4).
+- **Cambio:** 1) En el flujo `FLW_ActualizarConocimientoDeEspecialistaAzureSQL`, después del procedimiento, una acción HTTP `POST https://azureairesourceprueba2.search.windows.net/indexers/indexer-indexdailyprueba5vectorsearch/run?api-version=2024-07-01` autenticada con Entra ID (identidad con *Search Service Contributor* sobre el servicio; **no** clave de administración). 2) Programación de respaldo `{"interval":"PT24H","startTime":"<fuera de horario>"}` en el indexador. 3) (Decisión de coste) `freeLimitExhaustionBehavior=AutoPause` en la base de desarrollo.
+- **Comprobación previa:** `az sql db show --name free-sql-db-knowledge-specialist --server knowledgeserver --resource-group rg-daily-enhanced-dev-centralus --subscription b6d04525-e7b4-4b17-8492-2471f9779962 --query "{autoPause:autoPauseDelay,free:useFreeLimit,onExhaustion:freeLimitExhaustionBehavior}"`.
+- **Impacto:** Copilot Studio y la web app ven antes el contenido nuevo; con `AutoPause`, al agotar la cuota la base se pausa hasta el mes siguiente (el indexador y Daily fallarían hasta entonces).
+- **Rollback:** quitar la acción del flujo y la programación.
+
+## A8. Indexación incremental y borrado lógico en la vista SQL
+
+**Requiere revisión senior** (esquema de datos).
+
+- **Objetivo:** reindexar solo lo que cambia y propagar borrados (lote 6, 3.2 y 3.3).
+- **Cambio:** 1) `rowversion` (`RowVer`) y `EsEliminado bit NOT NULL DEFAULT 0` en la tabla principal; el procedimiento actualiza la fila principal en cada cambio. 2) La vista expone `HWM` (= `RowVer`) y `EsEliminado` y **no** filtra las filas eliminadas. 3) Origen de datos con `HighWaterMarkChangeDetectionPolicy` (`HWM`) y `SoftDeleteColumnDeletionDetectionPolicy` (`EsEliminado` = `1`); indexador con `convertHighWaterMarkToRowVersion: true`. 4) Reset y ejecución completa una vez.
+- **Comprobación previa:** script actual del procedimiento y de la vista en `docs/sql/` (bloqueado hasta que se exporte).
+- **Prueba en desarrollo:** modificar una experiencia y comprobar que solo se procesa ese documento; marcar otra como eliminada y comprobar que desaparecen sus fragmentos del índice; reprocesar un Word y comprobar que no hay duplicados.
+- **Impacto:** Copilot Studio y la web app, ninguno visible (mismo índice).
+- **Rollback:** quitar las directivas del origen de datos (vuelve a indexación completa); las columnas nuevas no rompen la vista.
