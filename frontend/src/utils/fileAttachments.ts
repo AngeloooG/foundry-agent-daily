@@ -12,21 +12,23 @@ export interface FileValidationResult {
   error?: string;
 }
 
+// Limits mirror the backend defaults (appsettings.json "ChatLimits"); the backend validates again.
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB for images
 const MAX_DOCUMENT_SIZE = 20 * 1024 * 1024; // 20MB for documents
 const MAX_FILE_COUNT = 10; // Total attachments (images + documents)
+export const MAX_IMAGE_COUNT = 5;
+export const MAX_TOTAL_ATTACHMENT_SIZE = 20 * 1024 * 1024; // 20MB per message
 const ALLOWED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp'];
 
 // Note: Office documents (docx, pptx, xlsx) are NOT supported by Azure Responses API.
 // They cannot be sent via CreateInputFilePart and require special parsing.
-// Only PDF and text-based formats are supported.
+// Only PDF and text-based formats are supported. HTML is rejected (also by the backend).
 const ALLOWED_DOCUMENT_TYPES = [
   'application/pdf',
   'text/plain',
   'text/markdown',
   'text/csv',
   'application/json',
-  'text/html',
   'application/xml',
   'text/xml',
 ];
@@ -38,11 +40,86 @@ const EXTENSION_TO_MIME: Record<string, string> = {
   '.txt': 'text/plain',
   '.csv': 'text/csv',
   '.json': 'application/json',
-  '.html': 'text/html',
-  '.htm': 'text/html',
   '.xml': 'application/xml',
   '.pdf': 'application/pdf',
 };
+
+/** Extensions accepted for each MIME type (a renamed file is rejected). */
+const ALLOWED_EXTENSIONS: Record<string, string[]> = {
+  'image/png': ['.png'],
+  'image/jpeg': ['.jpg', '.jpeg'],
+  'image/jpg': ['.jpg', '.jpeg'],
+  'image/gif': ['.gif'],
+  'image/webp': ['.webp'],
+  'application/pdf': ['.pdf'],
+  'text/plain': ['.txt'],
+  'text/markdown': ['.md', '.markdown'],
+  'text/csv': ['.csv'],
+  'application/json': ['.json'],
+  'application/xml': ['.xml'],
+  'text/xml': ['.xml'],
+};
+
+/** Value for the file input's `accept` attribute. */
+export const ACCEPTED_FILE_TYPES = [
+  ...ALLOWED_IMAGE_TYPES,
+  ...ALLOWED_DOCUMENT_TYPES,
+  ...new Set(Object.values(ALLOWED_EXTENSIONS).flat()),
+].join(',');
+
+/** A problem with the selected attachments. Codes are translated by the UI (dailyTranslations). */
+export type AttachmentIssue =
+  | { code: 'unsupportedType'; fileName: string }
+  | { code: 'extensionMismatch'; fileName: string }
+  | { code: 'emptyFile'; fileName: string }
+  | { code: 'fileTooLarge'; fileName: string; maxMb: number }
+  | { code: 'tooManyFiles'; max: number }
+  | { code: 'tooManyImages'; max: number }
+  | { code: 'totalTooLarge'; maxMb: number };
+
+const toMb = (bytes: number) => Math.round(bytes / (1024 * 1024));
+
+/**
+ * Validate the whole selection for one message: type (MIME and extension), empty files, per-file
+ * size, file count, image count and total size. Returns every issue so the user can fix them at once.
+ */
+export function validateAttachmentSelection(files: File[]): AttachmentIssue[] {
+  const issues: AttachmentIssue[] = [];
+
+  for (const file of files) {
+    const mimeType = getEffectiveMimeType(file);
+    const isImage = ALLOWED_IMAGE_TYPES.includes(mimeType);
+    if (!isImage && !ALLOWED_DOCUMENT_TYPES.includes(mimeType)) {
+      issues.push({ code: 'unsupportedType', fileName: file.name });
+      continue;
+    }
+    const extension = file.name.toLowerCase().match(/\.[^.]+$/)?.[0] ?? '';
+    if (!(ALLOWED_EXTENSIONS[mimeType] ?? []).includes(extension)) {
+      issues.push({ code: 'extensionMismatch', fileName: file.name });
+      continue;
+    }
+    if (file.size === 0) {
+      issues.push({ code: 'emptyFile', fileName: file.name });
+      continue;
+    }
+    const max = isImage ? MAX_FILE_SIZE : MAX_DOCUMENT_SIZE;
+    if (file.size > max) {
+      issues.push({ code: 'fileTooLarge', fileName: file.name, maxMb: toMb(max) });
+    }
+  }
+
+  if (files.length > MAX_FILE_COUNT) {
+    issues.push({ code: 'tooManyFiles', max: MAX_FILE_COUNT });
+  }
+  if (files.filter((f) => ALLOWED_IMAGE_TYPES.includes(getEffectiveMimeType(f))).length > MAX_IMAGE_COUNT) {
+    issues.push({ code: 'tooManyImages', max: MAX_IMAGE_COUNT });
+  }
+  if (files.reduce((sum, f) => sum + f.size, 0) > MAX_TOTAL_ATTACHMENT_SIZE) {
+    issues.push({ code: 'totalTooLarge', maxMb: toMb(MAX_TOTAL_ATTACHMENT_SIZE) });
+  }
+
+  return issues;
+}
 
 /**
  * Get the effective MIME type for a file, falling back to extension-based detection.
@@ -99,7 +176,7 @@ export function validateDocumentFile(file: File): FileValidationResult {
   if (!ALLOWED_DOCUMENT_TYPES.includes(mimeType)) {
     return { 
       valid: false, 
-      error: `"${file.name}" format not supported. Use PDF, TXT, MD, CSV, JSON, HTML, or XML` 
+      error: `"${file.name}" format not supported. Use PDF, TXT, MD, CSV, JSON, or XML` 
     };
   }
 

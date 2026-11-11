@@ -25,7 +25,8 @@ const logStateChange = (action: AppAction, prevState: AppState, nextState: AppSt
   if (!devLogger.enabled) return;
   const timestamp = new Date().toISOString().split('T')[1].split('.')[0];
   devLogger.group(`🔄 [${timestamp}] ${action.type}`);
-  devLogger.log('Action:', action);
+  // Only the action type: payloads carry message content and account claims.
+  devLogger.log('Action:', action.type);
   const changes: Record<string, unknown> = {};
   
   // Track all meaningful state changes

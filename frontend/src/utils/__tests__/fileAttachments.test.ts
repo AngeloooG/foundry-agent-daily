@@ -146,10 +146,10 @@ describe('validateDocumentFile', () => {
       expect(result.valid).toBe(true);
     });
 
-    it('accepts HTML files', () => {
+    it('rejects HTML files (blocked in client and backend)', () => {
       const file = createMockFile('page.html', 'text/html', 1000);
       const result = validateDocumentFile(file);
-      expect(result.valid).toBe(true);
+      expect(result.valid).toBe(false);
     });
 
     it('accepts XML files', () => {

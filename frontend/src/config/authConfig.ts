@@ -32,8 +32,10 @@ export const msalConfig: Configuration = {
     navigateToLoginRequestUrl: false, // Avoid redirect loops
   },
   cache: {
-    cacheLocation: "localStorage", // Use localStorage for token caching
-    storeAuthStateInCookie: false, // Set to true if IE11 support needed
+    // Accepted security decision: sessionStorage (MSAL default). Tokens live only in the tab and
+    // are cleared when it closes, narrowing what an XSS could read. A new tab signs in again
+    // (silently when the Entra session allows it, otherwise with a redirect).
+    cacheLocation: "sessionStorage",
   },
   system: {
     loggerOptions: {
@@ -68,3 +70,15 @@ export const tokenRequest = {
   scopes: [`api://${scopeClientId}/Chat.ReadWrite`],
   forceRefresh: false, // Use cached token if valid
 };
+
+/**
+ * Optional blank page used as redirect URI of silent (iframe) token requests, so the full app is
+ * never loaded in the hidden iframe. Off by default: it requires the backend setting
+ * SecurityHeaders:SilentRedirectPageEnabled and registering the URI in Entra ID
+ * (docs/hardening/acciones-azure.md, A4). When off, silent iframe failures fall back to a redirect.
+ */
+export const silentRedirectEnabled = import.meta.env.VITE_MSAL_SILENT_REDIRECT_ENABLED === "true";
+
+export const silentTokenRequest = silentRedirectEnabled
+  ? { ...tokenRequest, redirectUri: `${window.location.origin}/redirect.html` }
+  : tokenRequest;

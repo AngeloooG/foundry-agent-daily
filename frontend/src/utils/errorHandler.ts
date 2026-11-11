@@ -173,3 +173,20 @@ export async function retryWithBackoff<T>(
   
   throw lastError;
 }
+
+/**
+ * Convert any thrown value into an Error suitable for telemetry, without user content.
+ * AppErrors are plain objects; `new Error(String(e))` produced "[object Object]".
+ */
+export function toTelemetryError(error: unknown): Error {
+  if (error instanceof Error) {
+    return error;
+  }
+  if (error !== null && typeof error === 'object' && 'code' in error && 'recoverable' in error) {
+    const code = String((error as { code: unknown }).code);
+    const telemetryError = new Error(`AppError ${code}`);
+    telemetryError.name = `AppError.${code}`;
+    return telemetryError;
+  }
+  return new Error('Non-error value thrown');
+}

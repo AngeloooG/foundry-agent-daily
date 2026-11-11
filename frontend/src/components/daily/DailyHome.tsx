@@ -162,7 +162,7 @@ export function DailyHome({ t, dark }: DailyHomeProps) {
                 </div>
 
                 <div className={styles.cardGrid}>
-                    {t.whatIs.cards.map((card: any, index: number) => (
+                    {t.whatIs.cards.map((card, index) => (
                         <article key={card.title} className={styles.infoCard}>
                             <div
                                 className={`${styles.cardIcon} ${styles[`tone${capitalize(card.tone)}`]
@@ -184,7 +184,7 @@ export function DailyHome({ t, dark }: DailyHomeProps) {
                 <h2>{t.flow.title}</h2>
 
                 <div className={styles.flowCards}>
-                    {t.flow.steps.map((step: any, index: number) => (
+                    {t.flow.steps.map((step, index) => (
                         <div key={step.tag} className={styles.flowCardShell}>
                             <article className={styles.flowCard}>
                                 <div
@@ -219,7 +219,7 @@ export function DailyHome({ t, dark }: DailyHomeProps) {
                 <h2 className={styles.leftTitle}>{t.howWorks.title}</h2>
 
                 <div className={styles.howGrid}>
-                    {t.howWorks.steps.map((step: any, index: number) => (
+                    {t.howWorks.steps.map((step, index) => (
                         <article key={step.n} className={styles.howCard}>
                             <span
                                 className={
@@ -260,7 +260,7 @@ export function DailyHome({ t, dark }: DailyHomeProps) {
                 <h2>{t.benefits.title}</h2>
 
                 <div className={styles.benefitGrid}>
-                    {t.benefits.groups.map((group: any) => (
+                    {t.benefits.groups.map((group) => (
                         <article key={group.role} className={styles.benefitCard}>
                             <span
                                 className={`${styles.roleBadge} ${styles[`tone${capitalize(group.tone)}`]

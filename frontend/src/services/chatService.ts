@@ -302,7 +302,7 @@ export class ChatService {
       }
     }
 
-    trackException(lastError instanceof Error ? lastError : new Error(String(lastError)), {
+    trackException(lastError, {
       context: 'sendMessage',
       retryCount: String(maxRetries),
     });
@@ -369,7 +369,6 @@ export class ChatService {
           if (!event) continue;
 
           if (event.data?.error) {
-            console.error('[ChatService] SSE error event received:', event.data.error);
             const error = createAppError(
               new Error(event.data.error.message || event.data.error || 'Stream error occurred'),
               'STREAM'
@@ -545,7 +544,7 @@ export class ChatService {
         return;
       }
 
-      trackException(error instanceof Error ? error : new Error(String(error)), { context: 'sendMcpApproval' });
+      trackException(error, { context: "sendMcpApproval" });
 
       const appError: AppError = isAppError(error)
         ? error
