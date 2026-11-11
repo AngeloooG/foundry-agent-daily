@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.Identity.Web;
 using WebApp.Api.Models;
+using WebApp.Api.Security;
 using WebApp.Api.Services;
 using System.Security.Claims;
 
@@ -51,7 +53,7 @@ builder.Services.AddCors(options =>
         // In development, allow any localhost port for flexibility
         if (builder.Environment.IsDevelopment())
         {
-            policy.SetIsOriginAllowed(origin => 
+            policy.SetIsOriginAllowed(origin =>
             {
                 if (Uri.TryCreate(origin, UriKind.Absolute, out var uri))
                 {
@@ -93,8 +95,10 @@ if (!string.IsNullOrEmpty(tenantId))
     builder.Configuration["AzureAd:TenantId"] = tenantId;
 }
 
+// Real delegated scope requested by the SPA (frontend/src/config/authConfig.ts) and exposed by the
+// app registration (verified in lote 0).
 const string RequiredScope = "Chat.ReadWrite";
-const string ScopePolicyName = "RequireChatScope";
+const string ChatUserPolicy = "ChatUser";
 
 // Add Microsoft Identity Web authentication
 // Validates JWT bearer tokens issued for the SPA's delegated scope
@@ -118,20 +122,29 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         options.TokenValidationParameters.RoleClaimType = ClaimTypes.Role;
     }, options => builder.Configuration.Bind("AzureAd", options));
 
-builder.Services.AddAuthorization(options =>
-{
-    // Use Microsoft.Identity.Web's built-in scope validation
-    options.AddPolicy(ScopePolicyName, policy =>
-    {
-        policy.RequireAuthenticatedUser();
-        policy.RequireScope(RequiredScope);
-    });
-});
+// Any authenticated user of the CONSEIN tenant with the API scope may use Daily (no app roles).
+// The same policy is the FallbackPolicy: every endpoint is protected unless it opts out
+// explicitly with AllowAnonymous() (only health checks and the SPA shell do).
+var chatUser = new AuthorizationPolicyBuilder()
+    .RequireAuthenticatedUser()
+    .RequireScope(RequiredScope)
+    .RequireAssertion(context => UserIdentity.IsAllowedTenant(context.User, tenantId))
+    .Build();
+
+builder.Services.AddAuthorizationBuilder()
+    .AddPolicy(ChatUserPolicy, chatUser)
+    .SetFallbackPolicy(chatUser);
+
+// Ownership: resource-based authorization over Foundry conversation metadata.
+builder.Services.AddSingleton<IUserIdentityAccessor, ClaimsUserIdentityAccessor>();
+builder.Services.AddScoped<IAuthorizationHandler, ConversationOwnerAuthorizationHandler>();
 
 // Register Foundry Agent Service (v2 Agents API)
 // Uses Azure.AI.Projects SDK which works with v2 Agents API (/agents/ endpoint with human-readable IDs).
 builder.Services.AddHttpClient();
-builder.Services.AddScoped<IAgentFrameworkService, AgentFrameworkService>();
+builder.Services.AddScoped<AgentFrameworkService>();
+builder.Services.AddScoped<IAgentFrameworkService>(sp => sp.GetRequiredService<AgentFrameworkService>());
+builder.Services.AddScoped<IConversationOwnershipStore>(sp => sp.GetRequiredService<AgentFrameworkService>());
 
 var app = builder.Build();
 
@@ -144,10 +157,11 @@ if (!app.Environment.IsDevelopment())
 // Add status code pages for consistent error responses
 app.UseStatusCodePages();
 
-// Map health checks
+// Map health checks (anonymous, see ServiceDefaults)
 app.MapDefaultEndpoints();
 
-// Serve static files from wwwroot (frontend)
+// Serve static files from wwwroot (frontend). Runs before authorization, so the SPA assets
+// are outside the fallback policy.
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
@@ -162,29 +176,58 @@ app.UseAuthorization();
 
 // Unauthenticated health endpoint for container probes
 app.MapGet("/api/health", () => Results.Ok(new { status = "healthy" }))
-.WithName("GetHealth");
+    .AllowAnonymous()
+    .WithName("GetHealth");
+
+var api = app.MapGroup("/api").RequireAuthorization(ChatUserPolicy);
 
 // Streaming Chat endpoint: Streams agent response via SSE (conversationId → chunks → usage → done)
 // Supports MCP tool approval flow with previousResponseId and mcpApproval parameters
-app.MapPost("/api/chat/stream", async (
+api.MapPost("/chat/stream", async (
     ChatRequest request,
     IAgentFrameworkService agentService,
+    IConversationOwnershipStore ownership,
+    IAuthorizationService authorization,
+    IUserIdentityAccessor identity,
     HttpContext httpContext,
     IHostEnvironment environment,
     CancellationToken cancellationToken) =>
 {
+    var ownerKey = identity.GetOwnerKey(httpContext.User);
+    if (ownerKey is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    // An MCP approval always continues an existing conversation of the caller.
+    if (request.McpApproval is not null && string.IsNullOrWhiteSpace(request.ConversationId))
+    {
+        return Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Invalid Request",
+            detail: "An MCP approval must reference an existing conversation.");
+    }
+
+    // Sending, streaming, editing, regenerating and approving all target this conversation:
+    // only its owner may continue it. Checked before the SSE response starts.
+    if (!string.IsNullOrWhiteSpace(request.ConversationId)
+        && !await IsConversationOwnerAsync(authorization, httpContext.User, request.ConversationId))
+    {
+        return ConversationNotFound();
+    }
+
     try
     {
         httpContext.Response.Headers.Append("Content-Type", "text/event-stream");
         httpContext.Response.Headers.Append("Cache-Control", "no-cache");
         httpContext.Response.Headers.Append("Connection", "keep-alive");
 
-        var conversationId = request.ConversationId
-            ?? await agentService.CreateConversationAsync(request.Message, cancellationToken);
+        var conversationId = string.IsNullOrWhiteSpace(request.ConversationId)
+            ? await agentService.CreateConversationAsync(ownerKey, request.Message, cancellationToken)
+            : request.ConversationId;
 
         await WriteConversationIdEvent(httpContext.Response, conversationId, cancellationToken);
 
         var startTime = DateTime.UtcNow;
+        var citedFiles = new List<AuthorizedFile>();
 
         await foreach (var chunk in agentService.StreamMessageAsync(
             conversationId,
@@ -201,6 +244,9 @@ app.MapPost("/api/chat/stream", async (
             }
             else if (chunk.HasAnnotations && chunk.Annotations != null)
             {
+                citedFiles.AddRange(chunk.Annotations
+                    .Where(a => !string.IsNullOrEmpty(a.FileId))
+                    .Select(a => new AuthorizedFile(a.FileId!, string.IsNullOrEmpty(a.ContainerId) ? null : a.ContainerId)));
                 await WriteAnnotationsEvent(httpContext.Response, chunk.Annotations, cancellationToken);
             }
             else if (chunk.IsMcpApprovalRequest && chunk.McpApprovalRequest != null)
@@ -210,6 +256,20 @@ app.MapPost("/api/chat/stream", async (
             else if (chunk.IsToolUse && chunk.ToolName != null)
             {
                 await WriteToolUseEvent(httpContext.Response, chunk.ToolName, cancellationToken);
+            }
+        }
+
+        // Files cited or generated here become downloadable by the conversation owner.
+        if (citedFiles.Count > 0)
+        {
+            try
+            {
+                await ownership.AddAuthorizedFilesAsync(conversationId, citedFiles, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                var logger = httpContext.RequestServices.GetRequiredService<ILogger<Program>>();
+                logger.LogWarning(ex, "Could not record authorized files for conversation {ConversationId}; they will not be downloadable", conversationId);
             }
         }
 
@@ -229,32 +289,33 @@ app.MapPost("/api/chat/stream", async (
     {
         // Validation errors from image/file processing - return 400 Bad Request
         var errorResponse = ErrorResponseFactory.CreateFromException(
-            ex, 
-            400, 
+            ex,
+            400,
             environment.IsDevelopment());
-        
+
         await WriteErrorEvent(
-            httpContext.Response, 
-            errorResponse.Detail ?? errorResponse.Title, 
+            httpContext.Response,
+            errorResponse.Detail ?? errorResponse.Title,
             cancellationToken);
     }
     catch (Exception ex)
     {
         var logger = httpContext.RequestServices.GetRequiredService<ILogger<Program>>();
         logger.LogError(ex, "Chat stream error: {Message}", ex.Message);
-        
+
         var errorResponse = ErrorResponseFactory.CreateFromException(
-            ex, 
-            500, 
+            ex,
+            500,
             environment.IsDevelopment());
-        
+
         await WriteErrorEvent(
-            httpContext.Response, 
-            errorResponse.Detail ?? errorResponse.Title, 
+            httpContext.Response,
+            errorResponse.Detail ?? errorResponse.Title,
             cancellationToken);
     }
+
+    return Results.Empty;
 })
-.RequireAuthorization(ScopePolicyName)
 .WithName("StreamChatMessage");
 
 static async Task WriteConversationIdEvent(HttpResponse response, string conversationId, CancellationToken ct)
@@ -347,7 +408,7 @@ static async Task WriteErrorEvent(HttpResponse response, string message, Cancell
 
 // Get agent metadata (name, description, model, metadata)
 // Used by frontend to display agent information in the UI
-app.MapGet("/api/agent", async (
+api.MapGet("/agent", async (
     IAgentFrameworkService agentService,
     IHostEnvironment environment,
     CancellationToken cancellationToken) =>
@@ -360,10 +421,10 @@ app.MapGet("/api/agent", async (
     catch (Exception ex)
     {
         var errorResponse = ErrorResponseFactory.CreateFromException(
-            ex, 
-            500, 
+            ex,
+            500,
             environment.IsDevelopment());
-        
+
         return Results.Problem(
             title: errorResponse.Title,
             detail: errorResponse.Detail,
@@ -372,11 +433,10 @@ app.MapGet("/api/agent", async (
         );
     }
 })
-.RequireAuthorization(ScopePolicyName)
 .WithName("GetAgentMetadata");
 
 // Get agent info (for debugging)
-app.MapGet("/api/agent/info", async (
+api.MapGet("/agent/info", async (
     IAgentFrameworkService agentService,
     IHostEnvironment environment,
     CancellationToken cancellationToken) =>
@@ -393,10 +453,10 @@ app.MapGet("/api/agent/info", async (
     catch (Exception ex)
     {
         var errorResponse = ErrorResponseFactory.CreateFromException(
-            ex, 
-            500, 
+            ex,
+            500,
             environment.IsDevelopment());
-        
+
         return Results.Problem(
             title: errorResponse.Title,
             detail: errorResponse.Detail,
@@ -405,23 +465,27 @@ app.MapGet("/api/agent/info", async (
         );
     }
 })
-.RequireAuthorization(ScopePolicyName)
 .WithName("GetAgentInfo");
 
-// List conversations
-app.MapGet("/api/conversations", async (
+// List the caller's conversations (filtered by owner; conversations without owner are not listed)
+api.MapGet("/conversations", async (
     IAgentFrameworkService agentService,
+    IUserIdentityAccessor identity,
+    HttpContext httpContext,
     IHostEnvironment environment,
     int? limit,
     CancellationToken cancellationToken) =>
 {
-    // MI mode: conversations are agent-scoped, not user-scoped.
-    // All authenticated users see all conversations for this agent.
-    // This is by-design — OBO mode (ENTRA_BACKEND_CLIENT_ID set) scopes per-user.
+    var ownerKey = identity.GetOwnerKey(httpContext.User);
+    if (ownerKey is null)
+    {
+        return Results.Unauthorized();
+    }
+
     try
     {
         var pageSize = Math.Clamp(limit ?? 20, 1, 100);
-        var conversations = await agentService.ListConversationsAsync(pageSize, cancellationToken);
+        var conversations = await agentService.ListConversationsAsync(ownerKey, pageSize, cancellationToken);
         var hasMore = conversations.Count > pageSize;
         if (hasMore)
             conversations = conversations.Take(pageSize).ToList();
@@ -438,16 +502,22 @@ app.MapGet("/api/conversations", async (
         );
     }
 })
-.RequireAuthorization(ScopePolicyName)
 .WithName("ListConversations");
 
-// Get conversation messages
-app.MapGet("/api/conversations/{conversationId}/messages", async (
+// Get conversation messages (owner only)
+api.MapGet("/conversations/{conversationId}/messages", async (
     string conversationId,
     IAgentFrameworkService agentService,
+    IAuthorizationService authorization,
+    HttpContext httpContext,
     IHostEnvironment environment,
     CancellationToken cancellationToken) =>
 {
+    if (!await IsConversationOwnerAsync(authorization, httpContext.User, conversationId))
+    {
+        return ConversationNotFound();
+    }
+
     try
     {
         var messages = await agentService.GetConversationMessagesAsync(conversationId, cancellationToken);
@@ -464,16 +534,22 @@ app.MapGet("/api/conversations/{conversationId}/messages", async (
         );
     }
 })
-.RequireAuthorization(ScopePolicyName)
 .WithName("GetConversationMessages");
 
-// Delete conversation
-app.MapDelete("/api/conversations/{conversationId}", async (
+// Delete conversation (owner only)
+api.MapDelete("/conversations/{conversationId}", async (
     string conversationId,
     IAgentFrameworkService agentService,
+    IAuthorizationService authorization,
+    HttpContext httpContext,
     IHostEnvironment environment,
     CancellationToken cancellationToken) =>
 {
+    if (!await IsConversationOwnerAsync(authorization, httpContext.User, conversationId))
+    {
+        return ConversationNotFound();
+    }
+
     try
     {
         await agentService.DeleteConversationAsync(conversationId, cancellationToken);
@@ -498,17 +574,34 @@ app.MapDelete("/api/conversations/{conversationId}", async (
         );
     }
 })
-.RequireAuthorization(ScopePolicyName)
 .WithName("DeleteConversation");
 
-// File download endpoint for code interpreter outputs
-app.MapGet("/api/files/{fileId}", async (
+// Download a file cited or generated in one of the caller's conversations.
+// The managed identity can read every file of the Foundry project, so the file id alone is not
+// authorization: the caller must own the conversation and the file must be recorded in it.
+api.MapGet("/files/{fileId}", async (
     string fileId,
+    string? conversationId,
     string? containerId,
     IAgentFrameworkService agentService,
+    IConversationOwnershipStore ownership,
+    IAuthorizationService authorization,
+    HttpContext httpContext,
     IHostEnvironment environment,
     CancellationToken cancellationToken) =>
 {
+    if (string.IsNullOrWhiteSpace(conversationId))
+    {
+        return Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Invalid Request",
+            detail: "The conversationId query parameter is required.");
+    }
+
+    if (!await IsConversationOwnerAsync(authorization, httpContext.User, conversationId)
+        || !await ownership.IsFileAuthorizedAsync(conversationId, fileId, containerId, cancellationToken))
+    {
+        return Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Not Found", detail: "File not found.");
+    }
+
     try
     {
         var (content, fileName) = await agentService.DownloadFileAsync(fileId, containerId, cancellationToken);
@@ -537,65 +630,23 @@ app.MapGet("/api/files/{fileId}", async (
         );
     }
 })
-.RequireAuthorization(ScopePolicyName)
 .WithName("DownloadFile");
 
-// Uploaded-files cleanup endpoints — inspect & delete image files previously uploaded by
-// this web app. Uses the WebAppUploadFilenamePrefix tag applied on upload to scope the
-// operation to our own files, because the Foundry Files API does not expose a typed
-// expires_after parameter in the GA SDK (see README "Known limitations").
-app.MapGet("/api/files/uploaded", async (
-    IAgentFrameworkService agentService,
-    IHostEnvironment environment,
-    CancellationToken cancellationToken) =>
-{
-    try
-    {
-        var info = await agentService.ListUploadedFilesAsync(cancellationToken);
-        return Results.Ok(info);
-    }
-    catch (Exception ex)
-    {
-        var errorResponse = ErrorResponseFactory.CreateFromException(ex, 500, environment.IsDevelopment());
-        return Results.Problem(
-            title: errorResponse.Title,
-            detail: errorResponse.Detail,
-            statusCode: errorResponse.Status,
-            extensions: errorResponse.Extensions
-        );
-    }
-})
-.RequireAuthorization(ScopePolicyName)
-.WithName("ListUploadedFiles");
+// Unknown /api routes return 404 ProblemDetails instead of falling through to the SPA's index.html.
+api.MapFallback(() => Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Not Found"));
 
-app.MapPost("/api/files/cleanup", async (
-    IAgentFrameworkService agentService,
-    IHostEnvironment environment,
-    CancellationToken cancellationToken) =>
-{
-    try
-    {
-        var result = await agentService.CleanupUploadedFilesAsync(cancellationToken);
-        return Results.Ok(result);
-    }
-    catch (Exception ex)
-    {
-        var errorResponse = ErrorResponseFactory.CreateFromException(ex, 500, environment.IsDevelopment());
-        return Results.Problem(
-            title: errorResponse.Title,
-            detail: errorResponse.Detail,
-            statusCode: errorResponse.Status,
-            extensions: errorResponse.Extensions
-        );
-    }
-})
-.RequireAuthorization(ScopePolicyName)
-.WithName("CleanupUploadedFiles");
-
-// Fallback route for SPA - serve index.html for any non-API routes
-app.MapFallbackToFile("index.html");
+// Fallback route for SPA - serve index.html for any non-API routes (public shell; data needs a token)
+app.MapFallbackToFile("index.html").AllowAnonymous();
 
 app.Run();
+
+// Resource-based ownership check (see ConversationOwnerAuthorizationHandler).
+static async Task<bool> IsConversationOwnerAsync(IAuthorizationService authorization, ClaimsPrincipal user, string conversationId) =>
+    (await authorization.AuthorizeAsync(user, conversationId, ConversationOwnerRequirement.Instance)).Succeeded;
+
+// Same response whether the conversation does not exist or belongs to someone else.
+static IResult ConversationNotFound() =>
+    Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Not Found", detail: "Conversation not found.");
 
 // Helper to determine MIME type from file extension
 static string GetMimeType(string fileName)

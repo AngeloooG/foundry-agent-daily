@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using WebApp.Api.Security;
 using WebApp.Api.Services;
 
 namespace WebApp.Api.Tests.TestSupport;
@@ -43,8 +44,11 @@ public sealed class ApiFactory(IReadOnlyDictionary<string, string?>? settings = 
                 options.DefaultForbidScheme = TestAuthHandler.SchemeName;
             });
 
+            services.RemoveAll<AgentFrameworkService>();
             services.RemoveAll<IAgentFrameworkService>();
+            services.RemoveAll<IConversationOwnershipStore>();
             services.AddSingleton<IAgentFrameworkService>(Foundry);
+            services.AddSingleton<IConversationOwnershipStore>(Foundry);
         });
     }
 

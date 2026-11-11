@@ -91,14 +91,14 @@ public static class Extensions
 
     public static WebApplication MapDefaultEndpoints(this WebApplication app)
     {
-        // Liveness endpoint
-        app.MapHealthChecks("/health");
+        // Health checks are anonymous (platform probes); every other endpoint falls under the
+        // API's authorization FallbackPolicy.
+        app.MapHealthChecks("/health").AllowAnonymous();
 
-        // Readiness endpoint
         app.MapHealthChecks("/alive", new HealthCheckOptions
         {
             Predicate = r => r.Tags.Contains("live")
-        });
+        }).AllowAnonymous();
 
         return app;
     }

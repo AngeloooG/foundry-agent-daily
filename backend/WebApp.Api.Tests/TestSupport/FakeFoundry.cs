@@ -1,29 +1,36 @@
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using WebApp.Api.Models;
+using WebApp.Api.Security;
 using WebApp.Api.Services;
 
 namespace WebApp.Api.Tests.TestSupport;
 
 /// <summary>
-/// Minimal in-memory stand-in for Foundry behind <see cref="IAgentFrameworkService"/>.
-/// Streams a fixed script: two text chunks, one annotation, then usage.
+/// Minimal in-memory stand-in for Foundry behind <see cref="IAgentFrameworkService"/> and
+/// <see cref="IConversationOwnershipStore"/>. Conversations keep a metadata dictionary like Foundry
+/// does, and the ownership/file metadata uses the production <see cref="ConversationMetadata"/> helpers.
+/// Streams a fixed script: two text chunks, one file citation, then usage.
 /// </summary>
-public sealed class FakeFoundry : IAgentFrameworkService
+public sealed class FakeFoundry : IAgentFrameworkService, IConversationOwnershipStore
 {
-    private readonly ConcurrentDictionary<string, string?> _conversations = new();
+    public const string CitedFileId = "file_cited";
+
+    private readonly ConcurrentDictionary<string, Dictionary<string, string>> _conversations = new();
     private int _sequence;
 
     public int StreamCalls;
-    public int CleanupCalls;
     public int DownloadCalls;
     public string? LastStreamConversationId;
     public McpApprovalResponse? LastApproval;
 
     public IReadOnlyCollection<string> ConversationIds => _conversations.Keys.ToList();
 
-    /// <summary>Adds a conversation as if it had been created before ownership existed.</summary>
-    public void SeedLegacyConversation(string id, string title) => _conversations[id] = title;
+    public IReadOnlyDictionary<string, string> MetadataOf(string conversationId) => _conversations[conversationId];
+
+    /// <summary>Adds a conversation as if it had been created before ownership existed (no owner).</summary>
+    public void SeedLegacyConversation(string id, string title) =>
+        _conversations[id] = new Dictionary<string, string> { [ConversationMetadata.TitleKey] = title };
 
     public async IAsyncEnumerable<StreamChunk> StreamMessageAsync(
         string conversationId,
@@ -40,22 +47,23 @@ public sealed class FakeFoundry : IAgentFrameworkService
 
         yield return StreamChunk.Text("Hola");
         yield return StreamChunk.Text(" mundo");
-        yield return StreamChunk.WithAnnotations([new AnnotationInfo { Type = "file_citation", Label = "Caso", FileId = "file_cited" }]);
+        yield return StreamChunk.WithAnnotations([new AnnotationInfo { Type = "file_citation", Label = "Caso", FileId = CitedFileId }]);
         await Task.CompletedTask;
     }
 
-    public Task<string> CreateConversationAsync(string? firstMessage = null, CancellationToken cancellationToken = default)
+    public Task<string> CreateConversationAsync(string ownerKey, string? firstMessage = null, CancellationToken cancellationToken = default)
     {
         var id = $"conv_{Interlocked.Increment(ref _sequence):D4}";
-        _conversations[id] = firstMessage;
+        _conversations[id] = ConversationMetadata.ForNewConversation(ownerKey, firstMessage);
         return Task.FromResult(id);
     }
 
-    public Task<List<ConversationSummary>> ListConversationsAsync(int limit = 20, CancellationToken cancellationToken = default) =>
+    public Task<List<ConversationSummary>> ListConversationsAsync(string ownerKey, int limit = 20, CancellationToken cancellationToken = default) =>
         Task.FromResult(_conversations
+            .Where(c => c.Value.TryGetValue(ConversationMetadata.OwnerKey, out var owner) && ConversationMetadata.KeysMatch(owner, ownerKey))
             .OrderByDescending(c => c.Key)
             .Take(limit + 1)
-            .Select(c => new ConversationSummary { Id = c.Key, Title = c.Value })
+            .Select(c => new ConversationSummary { Id = c.Key, Title = c.Value.GetValueOrDefault(ConversationMetadata.TitleKey) })
             .ToList());
 
     public Task<List<ConversationMessageInfo>> GetConversationMessagesAsync(string conversationId, CancellationToken cancellationToken = default) =>
@@ -87,12 +95,20 @@ public sealed class FakeFoundry : IAgentFrameworkService
 
     public (int InputTokens, int OutputTokens, int TotalTokens)? GetLastUsage() => (10, 5, 15);
 
-    public Task<UploadedFilesInfo> ListUploadedFilesAsync(CancellationToken cancellationToken = default) =>
-        Task.FromResult(new UploadedFilesInfo(2, 2048));
+    // ===== IConversationOwnershipStore =====
 
-    public Task<UploadedFilesCleanupResult> CleanupUploadedFilesAsync(CancellationToken cancellationToken = default)
+    public Task<string?> GetOwnerAsync(string conversationId, CancellationToken cancellationToken) =>
+        Task.FromResult(_conversations.TryGetValue(conversationId, out var metadata)
+            ? metadata.GetValueOrDefault(ConversationMetadata.OwnerKey)
+            : null);
+
+    public Task AddAuthorizedFilesAsync(string conversationId, IReadOnlyCollection<AuthorizedFile> files, CancellationToken cancellationToken)
     {
-        Interlocked.Increment(ref CleanupCalls);
-        return Task.FromResult(new UploadedFilesCleanupResult(2, 0));
+        _conversations[conversationId] = ConversationMetadata.WithFiles(_conversations[conversationId], files);
+        return Task.CompletedTask;
     }
+
+    public Task<bool> IsFileAuthorizedAsync(string conversationId, string fileId, string? containerId, CancellationToken cancellationToken) =>
+        Task.FromResult(_conversations.TryGetValue(conversationId, out var metadata)
+            && ConversationMetadata.ContainsFile(metadata, fileId, containerId));
 }
