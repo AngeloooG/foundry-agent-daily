@@ -34,9 +34,13 @@ public sealed class ChatLimitsOptions
     [Range(typeof(long), "1", "52428800")]
     public long MaxTotalAttachmentBytes { get; set; } = 20 * 1024 * 1024;
 
-    /// <summary>Characters of text-based documents inlined into the prompt (token cost guard).</summary>
+    /// <summary>
+    /// Characters of text-based documents inlined into the prompt (token cost guard). Default 50,000
+    /// (≈12,500 tokens): inlined text stays in the conversation history and is re-processed on every
+    /// later turn. Configurable with <c>ChatLimits:MaxInlineTextChars</c>.
+    /// </summary>
     [Range(1, 2_000_000)]
-    public int MaxInlineTextChars { get; set; } = 200_000;
+    public int MaxInlineTextChars { get; set; } = 50_000;
 
     /// <summary>Maximum HTTP body for POST /api/chat/stream.</summary>
     [Range(typeof(long), "1024", "104857600")]

@@ -33,7 +33,12 @@ public interface IAgentFrameworkService
 
     Task DeleteConversationAsync(string conversationId, CancellationToken cancellationToken = default);
 
-    Task<(BinaryData Content, string FileName)> DownloadFileAsync(string fileId, string? containerId = null, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Downloads a file of at most <paramref name="maxBytes"/>; throws
+    /// <see cref="WebApp.Api.Infrastructure.FileTooLargeException"/> otherwise (without downloading
+    /// the content when the size is known beforehand). Callers must check ownership first.
+    /// </summary>
+    Task<(BinaryData Content, string FileName)> DownloadFileAsync(string fileId, string? containerId, long maxBytes, CancellationToken cancellationToken = default);
 
     Task<AgentMetadataResponse> GetAgentMetadataAsync(CancellationToken cancellationToken = default);
 
