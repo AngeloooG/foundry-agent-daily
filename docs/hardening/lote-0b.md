@@ -1,5 +1,7 @@
 # Lote 0b – Dependencias vulnerables
 
+> **Clasificación: CURRENT.** Registro de las dependencias actualizadas (implementado en la rama). Arquitectura vigente: `internal-minimal` ([lote-7-simplificado.md](lote-7-simplificado.md)).
+
 ## 1. Objetivo
 
 Corregir las vulnerabilidades altas y críticas detectadas en el lote 0 solo con versiones de parche o menores publicadas hace al menos 14 días (antes del 2026-10-27), una dependencia por commit y con los tests en verde después de cada una.

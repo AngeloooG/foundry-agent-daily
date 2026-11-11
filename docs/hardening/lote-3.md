@@ -1,5 +1,7 @@
 # Lote 3 – Seguridad del backend, límites y cabeceras
 
+> **Clasificación: CURRENT.** Registro de la seguridad del backend (implementado en la rama; se despliega con A2).
+
 ## 1. Objetivo
 
 Limitar el abuso (coste y disponibilidad), centralizar el manejo de errores sin filtrar detalles internos, no exponer el prompt del agente y añadir cabeceras de seguridad con una CSP construida a partir de los endpoints reales y compatible con MSAL.

@@ -1,5 +1,7 @@
 # Lote 7 – Infraestructura como código (sin desplegar)
 
+> **LEGACY DESIGN - DO NOT DEPLOY.** Este informe describe el diseño anterior de red privada completa (45 recursos en producción y 22 en desarrollo). Se conserva solo como referencia histórica y arquitectónica. La arquitectura objetivo vigente es **`internal-minimal`**: ver [lote-7-simplificado.md](lote-7-simplificado.md). El inventario de la sección 2 y la evidencia de la sección 5 siguen siendo válidos como registro del estado al 2026-11-10. Las conclusiones sobre el nivel de Search (S1) y el indexador privado en Basic están corregidas en el anexo H de ese documento.
+
 ## 1. Objetivo
 
 Describir en Bicep la plataforma compartida de Daily (Search, SQL, Foundry, Key Vault, identidades, monitorización, alertas y red privada opcional), parametrizada por entorno y sin secretos. Además: validarla con `what-if` sin tocar nada, diseñar la red privada y documentar la matriz RBAC de mínimo privilegio.

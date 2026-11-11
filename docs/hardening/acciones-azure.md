@@ -4,9 +4,29 @@ Ninguna de estas acciones se ha ejecutado. Cada una incluye la comprobación pre
 
 Convenciones: suscripción `b6d04525-e7b4-4b17-8492-2471f9779962`, grupo `rg-daily-enhanced-dev-centralus`.
 
+## Clasificación (arquitectura vigente: `internal-minimal`)
+
+| Acción | Clasificación |
+|---|---|
+| A1 Foundry ApiKey → Managed Identity / Entra ID | RECOMMENDED NOW: tarea independiente con migración controlada; no implementada |
+| A2 Reconstruir la imagen | RECOMMENDED NOW |
+| A3 Retención de imágenes subidas | RECOMMENDED NOW |
+| A4 Redirect URI de MSAL | RECOMMENDED NOW, opcional |
+| A5 Búsqueda híbrida | RECOMMENDED NOW, con condición (sin semántico mientras Search sea Free) |
+| A6 Clave de consulta para Copilot Studio | RECOMMENDED NOW, si se confirma que hoy usa una clave de administración (verificar antes el tipo) |
+| A7 Indexador a demanda y programación | RECOMMENDED NOW |
+| A8 Indexación incremental y borrado lógico | FUTURE |
+| A9 Cuota de `gpt-5.1` | **CLOSED / LEGACY INFRASTRUCTURE FINDING** (no es un bloqueante actual) |
+| A10 Mínimo privilegio de la identidad web | RECOMMENDED NOW, tarea posterior: retirada **secuencial** de Azure AI Developer y luego de Cognitive Services OpenAI Contributor (no retirar nada aún) |
+| A11 Red privada | FUTURE – ROADMAP / ADVANCED HARDENING |
+| A12 `AllowAllWindowsAzureIps` | FUTURE – Future infrastructure hardening |
+| A13 Asignaciones administrativas | Hallazgo de gobierno externo (escalar a CONSEIN) |
+
 ---
 
 ## A1. Conexión del proyecto de Foundry a Search con Entra ID en lugar de clave
+
+**Clasificación: RECOMMENDED NOW (B1).** La verificación de solo lectura **V1** (2026-11-11, [lote-7-simplificado.md](lote-7-simplificado.md), sección 13) concluyó: **el agente v10 consulta Search con clave de API** (asset de índice v2 → conexión `azureairesourceprueba2`, `authType: ApiKey`). La identidad del proyecto tiene Search Index Data Reader, pero no se usa. Según Learn, la autenticación sin claves usa la identidad de la **cuenta** (que hoy no tiene roles). No modificar la conexión funcional actual. **Tarea independiente, no implementada**: los 9 pasos (identidad soportada, conexión Entra, rol único, pruebas en Search, Foundry, web app y Copilot Studio, rollback a ApiKey, retirada condicional del rol del proyecto) están en [lote-7-simplificado.md](lote-7-simplificado.md), sección 13.6. No desactivar `disableLocalAuth` ni rotar o eliminar la clave.
 
 **Requiere revisión senior.**
 
@@ -23,12 +43,16 @@ Convenciones: suscripción `b6d04525-e7b4-4b17-8492-2471f9779962`, grupo `rg-dai
 
 ## A2. Reconstruir y redesplegar la imagen del contenedor
 
+**Clasificación: RECOMMENDED NOW.** Es el despliegue del código de los lotes 0–5.
+
 - **Objetivo:** que la imagen use un runtime de .NET corregido. La desplegada (`web:deploy-1786477517`) se construyó en 08/2026 y el runtime base probablemente contiene versiones afectadas por las vulnerabilidades del lote 0.
 - **Comando:** el flujo habitual de despliegue (`azd deploy`), solo después de fusionar este trabajo y con el IaC reconciliado (ver lote 7).
 - **Comprobación previa:** `az containerapp show --name ca-web-blx2jbksxc7iu --resource-group rg-daily-enhanced-dev-centralus --subscription b6d04525-e7b4-4b17-8492-2471f9779962 --query "properties.template.containers[0].image" -o tsv`.
 - **Rollback:** reactivar la revisión anterior de la Container App.
 
 ## A3. Retención de imágenes subidas por la web app
+
+**Clasificación: RECOMMENDED NOW** (operativa, baja prioridad).
 
 - **Objetivo:** las imágenes que los usuarios adjuntan se suben a Files de Foundry con el prefijo `webapp-upload-` y no caducan (la API GA no admite `expires_after`). El endpoint público de limpieza se eliminó en el lote 2 porque cualquier usuario podía borrar las de todos.
 - **Propuesta:** tarea operativa periódica (por ejemplo, un script ejecutado por el equipo de operaciones con su propia identidad) que liste los archivos con propósito `assistants` y prefijo `webapp-upload-` más antiguos de N días y los borre. Antes de borrar, comprobar que ninguna conversación activa los necesita (las respuestas ya generadas no se ven afectadas; volver a enviar la conversación sí).
@@ -37,6 +61,8 @@ Convenciones: suscripción `b6d04525-e7b4-4b17-8492-2471f9779962`, grupo `rg-dai
 - **Rollback:** no aplica (borrado). Empezar con un periodo de retención amplio.
 
 ## A4. (Opcional) Redirect URI para la renovación silenciosa de MSAL
+
+**Clasificación: RECOMMENDED NOW, opcional.** Solo si la redirección diaria molesta a los usuarios.
 
 **Requiere revisión senior** (cambio en Entra ID).
 
@@ -49,6 +75,8 @@ Convenciones: suscripción `b6d04525-e7b4-4b17-8492-2471f9779962`, grupo `rg-dai
 
 ## A5. Búsqueda híbrida semántica en el agente de Foundry
 
+**Clasificación: RECOMMENDED NOW, con condición.** Con Search Free, usar `vector_simple_hybrid` (sin semántico) para no agotar la asignación semántica gratuita que comparte con Copilot Studio. `vector_semantic_hybrid` solo con Search Basic (FUTURE).
+
 - **Objetivo:** que el agente use el vectorizador y la configuración semántica del índice (hoy `query_type: simple`).
 - **Cambio:** en Foundry, nueva versión del agente `Daily-Enhanced` con la herramienta `azure_ai_search` en `query_type: vector_semantic_hybrid`. No cambia la versión que usa la web app hasta fijar `AI_AGENT_VERSION`.
 - **Comprobación previa:** `az rest --method get --resource https://ai.azure.com --url "https://prj-daily-enhanced-dev-resource.services.ai.azure.com/api/projects/prj-daily-enhanced-dev/agents/Daily-Enhanced/versions/10?api-version=v1" --query "definition.tools"`.
@@ -57,6 +85,8 @@ Convenciones: suscripción `b6d04525-e7b4-4b17-8492-2471f9779962`, grupo `rg-dai
 - **Rollback:** volver `AI_AGENT_VERSION` a 10.
 
 ## A6. Copilot Studio: clave de consulta dedicada y fuente duplicada
+
+**Clasificación: RECOMMENDED NOW**, si se confirma que Copilot Studio usa hoy una clave de administración. Antes hay que **verificar el tipo de clave actual**. La conexión de Copilot Studio es independiente de la de Foundry: no se asume que compartan la misma clave. Copilot Studio no se modifica en esta fase.
 
 **Requiere revisión senior** (claves).
 
@@ -68,6 +98,8 @@ Convenciones: suscripción `b6d04525-e7b4-4b17-8492-2471f9779962`, grupo `rg-dai
 
 ## A7. Ejecución del indexador a demanda y programación diaria
 
+**Clasificación: RECOMMENDED NOW** (pasos 1 y 2). El paso 3 (`AutoPause` en la base) es una decisión de coste aparte y **no** forma parte del hardening: la base actual no se modifica sin una decisión explícita.
+
 - **Objetivo:** publicar el contenido nuevo en minutos sin impedir la pausa automática de SQL (ver lote 6, 3.4).
 - **Cambio:** 1) En el flujo `FLW_ActualizarConocimientoDeEspecialistaAzureSQL`, después del procedimiento, una acción HTTP `POST https://azureairesourceprueba2.search.windows.net/indexers/indexer-indexdailyprueba5vectorsearch/run?api-version=2024-07-01` autenticada con Entra ID (identidad con *Search Service Contributor* sobre el servicio; **no** clave de administración). 2) Programación de respaldo `{"interval":"PT24H","startTime":"<fuera de horario>"}` en el indexador. 3) (Decisión de coste) `freeLimitExhaustionBehavior=AutoPause` en la base de desarrollo.
 - **Comprobación previa:** `az sql db show --name free-sql-db-knowledge-specialist --server knowledgeserver --resource-group rg-daily-enhanced-dev-centralus --subscription b6d04525-e7b4-4b17-8492-2471f9779962 --query "{autoPause:autoPauseDelay,free:useFreeLimit,onExhaustion:freeLimitExhaustionBehavior}"`.
@@ -75,6 +107,8 @@ Convenciones: suscripción `b6d04525-e7b4-4b17-8492-2471f9779962`, grupo `rg-dai
 - **Rollback:** quitar la acción del flujo y la programación.
 
 ## A8. Indexación incremental y borrado lógico en la vista SQL
+
+**Clasificación: FUTURE.** Bloqueada hasta que exista `docs/sql/`.
 
 **Requiere revisión senior** (esquema de datos).
 
@@ -87,27 +121,40 @@ Convenciones: suscripción `b6d04525-e7b4-4b17-8492-2471f9779962`, grupo `rg-dai
 
 ## A9. Cuota de `gpt-5.1` GlobalStandard en centralus
 
-- **Objetivo:** que la plataforma nueva (lote 7) pueda crear sus despliegues de modelos.
-- **Estado (verificado con el what-if del 2026-11-10):** el preflight con los despliegues de `main.*.bicepparam` falla con `InsufficientQuota` para `gpt-5.1` GlobalStandard en centralus (uso 500 frente a un límite de 250, en miles de TPM). El recurso actual consume esa cuota.
-- **Opciones:** 1) reducir la capacidad de los despliegues actuales (`gpt-5`, `gpt-5.1`) a lo que Daily usa de verdad (revisar las métricas de tokens de los últimos 30 días); 2) solicitar más cuota; 3) usar otra región para la cuenta nueva (con impacto en latencia y en la red privada).
-- **Comprobación previa (solo lectura):** `az cognitiveservices usage list --location centralus --subscription b6d04525-e7b4-4b17-8492-2471f9779962 -o table`.
-- **Impacto:** reducir la capacidad puede provocar 429 en Daily y en otros consumidores del recurso actual si se queda corta.
-- **Rollback:** restaurar la capacidad anterior del despliegue.
+**Clasificación: CLOSED / LEGACY INFRASTRUCTURE FINDING** (verificación del 2026-11-11, [lote-7-simplificado.md](lote-7-simplificado.md), sección 15). Estado real: despliegue `gpt-5.1` GlobalStandard en centralus, capacidad 500, `provisioningState: Succeeded`. `InsufficientQuota` pertenecía a la infraestructura legacy, que intentaba crear **otro** despliegue. **No es un bloqueante actual de Daily.**
+
+**Advertencia que se conserva:** NO recrear, redimensionar ni sustituir automáticamente el deployment actual de `gpt-5.1` sin revisar primero la cuota disponible.
+
+| Dato | Valor |
+|---|---|
+| Origen del dato | Validación previa (*preflight*) de ARM durante `az deployment sub what-if` del diseño legacy, 2026-11-10. No es una métrica de Azure Monitor: es el error `InsufficientQuota` |
+| Cuota afectada | *One Thousand Tokens Per Minute – gpt-5.1 – GlobalStandard* |
+| Unidad | 1 unidad = 1.000 tokens por minuto (TPM) |
+| Despliegue que se intentaba crear | `gpt-5.1`, SKU GlobalStandard, capacidad 50 unidades, en la cuenta **nueva** del diseño legacy (ya descartada) |
+| Región | centralus (cuota por suscripción y región) |
+| Límite | 250 unidades |
+| Uso | 500 unidades (*"Current usage: 500 / 250 quota units"*) |
+| Disponible | 0 (*"only 0 quota units are available"*) |
+| Comandos de lectura (ejecutados el 2026-11-11; resultados en lote-7-simplificado.md, sección 15) | `az cognitiveservices usage list --location centralus --subscription b6d04525-e7b4-4b17-8492-2471f9779962 -o table` · `az cognitiveservices account deployment list --name prj-daily-enhanced-dev-resource --resource-group rg-daily-enhanced-dev-centralus --subscription b6d04525-e7b4-4b17-8492-2471f9779962 --query "[].{name:name,model:properties.model.name,version:properties.model.version,sku:sku.name,capacity:sku.capacity}" -o table` |
+| Interpretación (verificada el 2026-11-11: las 500 unidades son el despliegue `gpt-5.1` de Daily, capacidad 500) | La cuota regional de `gpt-5.1` GlobalStandard de la suscripción está totalmente consumida por despliegues existentes (los de Daily y, posiblemente, los de otras aplicaciones de la misma suscripción; por verificar con los comandos anteriores). Que el uso supere el límite sugiere que el límite se redujo después de crear los despliegues, o que hay asignaciones previas; no se puede saber sin la lectura. **Los despliegues existentes siguen funcionando**: solo se bloquea crear despliegues nuevos o aumentar capacidad |
+| Impacto en `internal-minimal` | Ninguno |
+| Pendiente | Comparar el consumo real de tokens de Daily con la capacidad asignada (decisión operativa, sin cambios ahora) |
 
 ## A10. Mínimo privilegio para la identidad de la Container App
 
-**Requiere revisión senior** (RBAC). **No retirar nada sin la prueba.**
+**Clasificación: RECOMMENDED NOW (tarea posterior, B2).** Hipótesis candidata, no cambio aprobado. KEEP: Cognitive Services User y AcrPull. CANDIDATE TO REMOVE: Azure AI Developer y Cognitive Services OpenAI Contributor. DO NOT ADD: Foundry User. Procedimiento secuencial en [lote-7-simplificado.md](lote-7-simplificado.md), sección 14.6.
 
-- **Objetivo:** sustituir *Azure AI Developer*, *Cognitive Services OpenAI Contributor* y *Cognitive Services User* (los tres sobre el proyecto) por **Foundry User** sobre el proyecto (detalle en [matriz-rbac.md](matriz-rbac.md)).
-- **Pasos:**
-  1. `az role assignment create --assignee-object-id 6b88e44e-<resto> --assignee-principal-type ServicePrincipal --role "Foundry User" --scope /subscriptions/b6d04525-e7b4-4b17-8492-2471f9779962/resourceGroups/rg-daily-enhanced-dev-centralus/providers/Microsoft.CognitiveServices/accounts/prj-daily-enhanced-dev-resource/projects/prj-daily-enhanced-dev` (es un alta; no afecta a nada).
-  2. Prueba aislada: una identidad nueva asignada por el usuario con **solo** Foundry User, una revisión de prueba de la Container App que la use (sin tráfico de usuarios), y la verificación manual (enviar mensaje, adjuntar imagen, descargar archivo citado, listar y abrir conversaciones).
-  3. Si todo funciona, retirar los tres roles anteriores de la identidad real, uno a uno, repitiendo la verificación.
-- **Comprobación previa:** `az role assignment list --assignee 6b88e44e-<resto> --all --subscription b6d04525-e7b4-4b17-8492-2471f9779962 -o table`.
-- **Impacto:** Copilot Studio y Search, ninguno. Web app: 403 de Foundry (que el backend devuelve como 502) si el rol no cubre alguna acción.
-- **Rollback:** volver a asignar el rol retirado.
+**Requiere revisión senior** (RBAC).
 
-## A11. Migración a red privada
+- **Objetivo:** dejar la identidad web con el mínimo candidato **Cognitive Services User** (proyecto, ya asignado) y **AcrPull**, retirando de uno en uno *Azure AI Developer* y *Cognitive Services OpenAI Contributor*. El inventario del 2026-11-11 muestra que no hace falta **añadir** ningún rol. Foundry User **no** se añade: tiene las mismas `dataActions` que Cognitive Services User y más `actions` (lote-7-simplificado.md, sección 14).
+- **Procedimiento:** paso 1, retirar **solo** Azure AI Developer y validar (Container App Healthy, inicio de sesión, `GET /api/agent` 200, metadata del agente, conversación, streaming, consulta con Search, adjuntos, cancelación o regeneración, logs sin 401/403); si falla, restaurarlo. Si funciona, esperar validación. Paso 2, retirar Cognitive Services OpenAI Contributor con las mismas pruebas; si falla, restaurar solo ese rol. Nunca dos roles a la vez. Sin identidad temporal.
+- **Estado:** no ejecutado. No se retira ningún permiso actual.
+- **Impacto:** Copilot Studio y Search, ninguno. Web app: 403 de Foundry (502 en el backend) si el rol candidato no cubre alguna acción.
+- **Rollback:** volver a asignar el rol retirado, con el mismo alcance.
+
+## A11. Migración a red privada (ROADMAP FUTURO / ADVANCED HARDENING)
+
+**Clasificación: FUTURE – ROADMAP / ADVANCED HARDENING.** No forma parte de `internal-minimal` ni es requisito previo de la producción interna. NOT FOR CURRENT DEPLOYMENT.
 
 **Requiere revisión senior** (red, identidad, RBAC).
 
@@ -117,11 +164,13 @@ Convenciones: suscripción `b6d04525-e7b4-4b17-8492-2471f9779962`, grupo `rg-dai
   - La cuenta de Foundry y el entorno de Container Apps actuales **no** admiten añadir VNet después: hay que crearlos de nuevo.
   - Search tiene que ser S1 o superior.
   - Copilot Studio necesita soporte de VNet de Power Platform (entorno administrado, VNets en eastus y westus): hasta entonces, `keepSearchPublic = true`.
-- **Comprobación previa:** `az deployment sub what-if` con `main.prod.bicepparam` y `enableAgentVnetInjection=false` (salida en [whatif/prod.txt](whatif/prod.txt)).
+- **Referencia histórica:** what-if del diseño legacy en [whatif/](whatif/README.md) (LEGACY DESIGN - DO NOT DEPLOY, no volver a ejecutar).
 - **Impacto:** cambio de URL e historial de conversaciones nuevo para los usuarios (avisar antes); Copilot Studio necesita la clave de consulta del Search nuevo.
 - **Rollback:** por fase (ver la tabla de red-privada.md); los recursos actuales siguen vivos hasta la fase F6.
 
-## A12. Reglas del firewall de `knowledgeserver`
+## A12. Reglas del firewall de `knowledgeserver` (Future infrastructure hardening)
+
+**Clasificación: FUTURE – Future infrastructure hardening (deuda técnica conocida).** No retirar la regla mientras el indexador de Search Free dependa de ella. No bloquea el hardening del código.
 
 **Requiere revisión senior** (red).
 
@@ -131,10 +180,12 @@ Convenciones: suscripción `b6d04525-e7b4-4b17-8492-2471f9779962`, grupo `rg-dai
 - **Impacto:** indexador (Copilot Studio y la web app verían contenido desactualizado), flujo de Power Automate si usa el conector SQL desde Power Platform, y accesos administrativos.
 - **Rollback:** recrear la regla.
 
-## A13. Asignaciones privilegiadas fuera del alcance de Daily (para administradores del inquilino)
+## A13. Asignaciones administrativas excesivas o desconocidas (hallazgo de gobierno)
+
+**Clasificación: hallazgo de gobierno externo al proyecto.** Solo se documenta. No se modifica ninguna asignación (User Access Administrator, Contributor, asignaciones desconocidas, ámbito de suscripción ni de inquilino) desde este proyecto. Escalar al administrador de Azure/Entra de CONSEIN. No es responsabilidad del código de Daily.
 
 **Requiere revisión senior.**
 
-- Dos usuarios con **User Access Administrator en `/`** (elevación de administrador global sin retirar). Recomendación: retirarla (`az role assignment delete --role "User Access Administrator" --scope /` la ejecuta cada usuario afectado) y usar PIM.
-- El principal de servicio `2907…` tiene **Contributor** y **User Access Administrator** sobre la suscripción. Hay que identificar su origen (registro de actividad y propietario de la aplicación) antes de reducirlo al grupo de recursos (ver [matriz-rbac.md](matriz-rbac.md), 2.5).
+- Dos usuarios con **User Access Administrator en `/`** (elevación de administrador global sin retirar). Recomendación para el administrador de CONSEIN: revisar si sigue siendo necesaria y usar PIM. Desde este proyecto no se ejecuta ningún cambio.
+- El principal de servicio `2907…` tiene **Contributor** y **User Access Administrator** sobre la suscripción. El administrador de CONSEIN debe identificar su origen (registro de actividad y propietario de la aplicación); ver [matriz-rbac.md](matriz-rbac.md), 2.5.
 - **Impacto en Daily:** ninguno directo.

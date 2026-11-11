@@ -1,5 +1,7 @@
 # Verificación manual: CSP, MSAL y sesión
 
+> **Clasificación: RECOMMENDED NOW.** Procedimiento que el equipo debe ejecutar con Entra real antes de desplegar la imagen nueva (A2).
+
 Estos casos necesitan Microsoft Entra ID real y un navegador, por eso no están en la CI. Ejecútalos en el entorno de desarrollo (o en local) **antes de desplegar en producción**, con la CSP activa (valor por defecto).
 
 ## Preparación

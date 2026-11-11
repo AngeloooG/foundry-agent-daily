@@ -1,5 +1,7 @@
 # Lote 6 – Informe de datos y Azure AI Search
 
+> **Clasificación: CURRENT** (análisis y evidencia del 2026-11-10). Sus propuestas se clasifican en [acciones-azure.md](acciones-azure.md): A5 y A7 son RECOMMENDED NOW; A8 es FUTURE. Search sigue en Free (decisión del 2026-11-11).
+
 Solo análisis y propuesta. No se ha cambiado nada en Azure, SQL, Search, Foundry ni Copilot Studio.
 
 ## 1. Objetivo

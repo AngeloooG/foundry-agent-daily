@@ -1,5 +1,7 @@
 # Lote 4 – Seguridad del frontend
 
+> **Clasificación: CURRENT.** Registro de la seguridad del frontend (implementado en la rama; se despliega con A2).
+
 ## 1. Objetivo
 
 Endurecer la sesión (MSAL), el renderizado de respuestas del modelo (Markdown), los adjuntos y la telemetría, sin enviar ni registrar contenido de usuario, tokens ni claims.

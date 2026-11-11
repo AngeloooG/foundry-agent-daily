@@ -1,5 +1,8 @@
 # Diseño de red privada de Daily
 
+> **NOT FOR CURRENT DEPLOYMENT.**
+> **Clasificación: FUTURE – ROADMAP / ADVANCED HARDENING.** Este documento no forma parte de la arquitectura vigente (`internal-minimal`, ver [lote-7-simplificado.md](lote-7-simplificado.md)) y **no es requisito previo de la producción interna**. Se conserva como diseño de referencia por si en el futuro se exige aislamiento de red. Algunas afirmaciones sobre niveles de Search que aparecen aquí se corrigen en el anexo H de lote-7-simplificado.md.
+
 **Requiere revisión senior** (red, identidad y RBAC). Nada de esto se ha desplegado. El Bicep correspondiente está en [`infra/platform/`](../../infra/platform/) (`enablePrivateNetworking = true` en `main.prod.bicepparam`).
 
 Fuentes revisadas en Microsoft Learn (2026-11-10):

@@ -2,7 +2,15 @@
 
 **Requiere revisión senior.** No se ha quitado ni asignado ningún rol. La evidencia viene de `az role assignment list --all --subscription b6d04525-e7b4-4b17-8492-2471f9779962` (filtrado por el grupo `rg-daily-enhanced-dev-centralus`) y de `--include-inherited` sobre el grupo, ambos del **2026-11-10**. Los identificadores van truncados.
 
-El rol mínimo de cada relación es el que crea [`infra/platform/modules/rbac.bicep`](../../infra/platform/modules/rbac.bicep) en la plataforma nueva, siempre con alcance del recurso individual, nunca de grupo ni de suscripción.
+> **Clasificación:**
+> - Los roles actuales y su evidencia son **CURRENT**.
+> - Las reducciones propuestas (A10) son **RECOMMENDED NOW**. Se aplican solo con el procedimiento de [lote-7-simplificado.md](lote-7-simplificado.md), sección 14.
+> - La identidad que usa Foundry → Search queda **pendiente de la verificación V1** (sección 13 de ese documento).
+> - Las filas de CI futura y de identidad de despliegue son **FUTURE**.
+>
+> No se ha creado ni retirado ninguna asignación.
+
+El rol mínimo de cada relación se aplica siempre con alcance del recurso individual, nunca de grupo ni de suscripción. La plantilla `infra/platform/modules/rbac.bicep` que lo implementaba pertenece al diseño legacy; la nueva versión de Bicep (`internal-minimal`) solo incluirá B2.
 
 ## 1. Identidades
 
@@ -23,7 +31,7 @@ Leyenda de estado: **Confirmado** = rol mínimo verificado con documentación y 
 
 | Destino | Rol actual (evidencia) | Rol mínimo | Alcance | Justificación | Riesgo de retirar el actual | Prueba previa | Estado |
 |---|---|---|---|---|---|---|---|
-| Foundry, proyecto | **Azure AI Developer**, **Cognitive Services OpenAI Contributor** y **Cognitive Services User** sobre el proyecto | **Foundry User** (`53ca6127…`, antes *Azure AI User*) | Proyecto | El backend solo usa acciones de datos: leer el agente, crear y leer conversaciones, Responses, y subir y descargar archivos. No gestiona despliegues, conexiones ni el proyecto. Los tres roles actuales permiten además crear y borrar agentes y despliegues | Si Foundry User no cubre alguna acción de datos (por ejemplo, Files), el chat devuelve 403 → 502 | Acción **A10**: asignar Foundry User en paralelo, desplegar una revisión de prueba con una identidad nueva que **solo** tenga Foundry User y ejecutar la verificación manual (enviar mensaje, adjuntar imagen, descargar archivo citado, listar conversaciones). Solo después, retirar los tres roles | **Pendiente** |
+| Foundry, proyecto | **Azure AI Developer**, **Cognitive Services OpenAI Contributor** y **Cognitive Services User** sobre el proyecto | **Cognitive Services User** (ya asignado; corrige la recomendación anterior de Foundry User, que tiene las mismas `dataActions` y más `actions`) | Proyecto | El backend solo usa acciones de datos: leer el agente, conversaciones, Responses y archivos. `Microsoft.CognitiveServices/*` (`dataActions`) de Cognitive Services User las cubre. Azure AI Developer (`MachineLearningServices/*` y `dataActions` incluidas) y OpenAI Contributor (escritura de despliegues) no aportan nada que se use | Si alguna operación no estuviera cubierta, el chat devolvería 403 → 502 | Acción **A10**: retirar de uno en uno Azure AI Developer y después OpenAI Contributor, con las pruebas y el rollback de lote-7-simplificado.md, sección 14 | **Pendiente** (inventario del 2026-11-11 hecho; sin cambios) |
 | Foundry, cuenta (Azure OpenAI) | Ninguno | Ninguno | — | El backend llama al endpoint del **proyecto**, no al de Azure OpenAI de la cuenta | — | — | Confirmado (código: `AI_AGENT_ENDPOINT` = endpoint del proyecto) |
 | Search | Ninguno | Ninguno | — | El backend no llama a Search; lo hace el agente | — | — | Confirmado (sin SDK de Search en el backend) |
 | SQL | Ninguno | Ninguno | — | Sin acceso a SQL | — | — | Confirmado |
@@ -36,7 +44,7 @@ Leyenda de estado: **Confirmado** = rol mínimo verificado con documentación y 
 
 | Destino | Rol actual (evidencia) | Rol mínimo | Alcance | Justificación | Riesgo de retirar | Prueba previa | Estado |
 |---|---|---|---|---|---|---|---|
-| Search | **Search Index Data Reader** sobre el servicio | Search Index Data Reader | Servicio de Search (opcionalmente, el índice concreto) | Lectura del índice por la herramienta del agente con la conexión Entra (A1). Hoy no se usa porque la conexión es por clave | Hoy ninguno; después de A1, el agente deja de encontrar documentos | A1 | Confirmado |
+| Search | **Search Index Data Reader** sobre el servicio | **No participa en el flujo actual** (V1, 2026-11-11: el agente v10 usa la conexión `azureairesourceprueba2` con ApiKey). El rol mínimo con Entra se determinará en A1 (según Learn, la identidad de la cuenta) | Servicio de Search | Se conserva hasta completar A1 | Ninguno hoy | A1, paso 9: retirarlo solo si se demuestra que no es la identidad utilizada | **CURRENT: sin uso; no retirar** |
 | Foundry, cuenta | Ninguno | Ninguno | — | El proyecto usa los modelos de su propia cuenta sin rol adicional | — | — | Confirmado |
 | SQL, ACR, Key Vault, Application Insights | Ninguno | Ninguno | — | Sin acceso | — | — | Confirmado |
 
@@ -65,14 +73,19 @@ Autenticación por **federación OIDC** de GitHub a una identidad dedicada, limi
 |---|---|---|---|---|---|---|---|
 | Recursos de Daily | Usuario `e71b…`: **Owner** de la suscripción. Principal de servicio `2907…`: **Contributor** y **User Access Administrator** de la suscripción | **Contributor** sobre el grupo de recursos de Daily, más **Role Based Access Control Administrator** sobre ese grupo **con condición** que solo permita asignar los 5 roles de `rbac.bicep` (Foundry User, Monitoring Metrics Publisher, Search Index Data Reader, Cognitive Services OpenAI User, Reader) | Grupo de recursos | La plataforma crea el grupo (alcance de suscripción): el primer despliegue lo hace un administrador; los siguientes, la identidad limitada | Si el principal `2907…` lo usa alguna automatización desconocida, esta dejaría de funcionar | Identificar el origen del principal `2907…` (registros de actividad y propietario de la aplicación) | Pendiente |
 
-## 3. Hallazgos fuera del alcance de Daily (solo informar)
+## 3. Hallazgos fuera del alcance de Daily (solo informar; hallazgo de gobierno A13, escalar al administrador de Azure/Entra de CONSEIN)
 
 - Dos usuarios tienen **User Access Administrator en la raíz (`/`)**. Es una elevación de administrador global que suele quedar activa por olvido. Recomendación para los administradores del inquilino: retirarla y usar PIM.
 - La regla `AllowAllWindowsAzureIps` de `knowledgeserver` permite conexiones desde cualquier suscripción de Azure (ver [red-privada.md](red-privada.md)).
 
-## 4. Qué implementa el Bicep
+## 4. Qué implementaba el Bicep legacy (LEGACY DESIGN - DO NOT DEPLOY)
 
-`rbac.bicep` crea, con alcance de recurso:
+> En `internal-minimal`:
+> - las asignaciones 3, 4 y 5 **ya existen** en los recursos actuales y no se redeclaran;
+> - la 1 es B2 (A10), que se aplica con su procedimiento;
+> - la 2 es FUTURE (solo hace falta con telemetría autenticada por Entra).
+
+`rbac.bicep` (diseño legacy) creaba, con alcance de recurso:
 
 1. Web app → proyecto: **Foundry User**.
 2. Web app → Application Insights del backend: **Monitoring Metrics Publisher**.

@@ -1,5 +1,7 @@
 # Lote 0 – Línea base, inventario y CI
 
+> **Clasificación: CURRENT.** Registro de la línea base, el inventario y las verificaciones de Azure (solo lectura) del 2026-11-10. Arquitectura vigente: `internal-minimal` ([lote-7-simplificado.md](lote-7-simplificado.md)).
+
 ## 1. Objetivo
 
 Medir el estado de partida de `Develop-Daily` (commit `c378ea5`) antes de cualquier cambio, inventariar el código relevante para seguridad, verificar la configuración de Azure con lecturas y crear una CI que no toca Azure.

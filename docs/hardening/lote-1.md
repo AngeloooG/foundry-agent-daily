@@ -1,5 +1,7 @@
 # Lote 1 – Tests de integración y abstracción de Foundry
 
+> **Clasificación: CURRENT.** Registro de los tests de integración y la abstracción de Foundry (implementado en la rama).
+
 ## 1. Objetivo
 
 Poder probar el pipeline real del API (autenticación, autorización, endpoints, SSE) con un Foundry falso **antes** de cualquier refactor, y dejar escritos los tests que definen el comportamiento objetivo de los lotes siguientes.
