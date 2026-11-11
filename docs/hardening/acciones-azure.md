@@ -84,3 +84,57 @@ Convenciones: suscripción `b6d04525-e7b4-4b17-8492-2471f9779962`, grupo `rg-dai
 - **Prueba en desarrollo:** modificar una experiencia y comprobar que solo se procesa ese documento; marcar otra como eliminada y comprobar que desaparecen sus fragmentos del índice; reprocesar un Word y comprobar que no hay duplicados.
 - **Impacto:** Copilot Studio y la web app, ninguno visible (mismo índice).
 - **Rollback:** quitar las directivas del origen de datos (vuelve a indexación completa); las columnas nuevas no rompen la vista.
+
+## A9. Cuota de `gpt-5.1` GlobalStandard en centralus
+
+- **Objetivo:** que la plataforma nueva (lote 7) pueda crear sus despliegues de modelos.
+- **Estado (verificado con el what-if del 2026-11-10):** el preflight con los despliegues de `main.*.bicepparam` falla con `InsufficientQuota` para `gpt-5.1` GlobalStandard en centralus (uso 500 frente a un límite de 250, en miles de TPM). El recurso actual consume esa cuota.
+- **Opciones:** 1) reducir la capacidad de los despliegues actuales (`gpt-5`, `gpt-5.1`) a lo que Daily usa de verdad (revisar las métricas de tokens de los últimos 30 días); 2) solicitar más cuota; 3) usar otra región para la cuenta nueva (con impacto en latencia y en la red privada).
+- **Comprobación previa (solo lectura):** `az cognitiveservices usage list --location centralus --subscription b6d04525-e7b4-4b17-8492-2471f9779962 -o table`.
+- **Impacto:** reducir la capacidad puede provocar 429 en Daily y en otros consumidores del recurso actual si se queda corta.
+- **Rollback:** restaurar la capacidad anterior del despliegue.
+
+## A10. Mínimo privilegio para la identidad de la Container App
+
+**Requiere revisión senior** (RBAC). **No retirar nada sin la prueba.**
+
+- **Objetivo:** sustituir *Azure AI Developer*, *Cognitive Services OpenAI Contributor* y *Cognitive Services User* (los tres sobre el proyecto) por **Foundry User** sobre el proyecto (detalle en [matriz-rbac.md](matriz-rbac.md)).
+- **Pasos:**
+  1. `az role assignment create --assignee-object-id 6b88e44e-<resto> --assignee-principal-type ServicePrincipal --role "Foundry User" --scope /subscriptions/b6d04525-e7b4-4b17-8492-2471f9779962/resourceGroups/rg-daily-enhanced-dev-centralus/providers/Microsoft.CognitiveServices/accounts/prj-daily-enhanced-dev-resource/projects/prj-daily-enhanced-dev` (es un alta; no afecta a nada).
+  2. Prueba aislada: una identidad nueva asignada por el usuario con **solo** Foundry User, una revisión de prueba de la Container App que la use (sin tráfico de usuarios), y la verificación manual (enviar mensaje, adjuntar imagen, descargar archivo citado, listar y abrir conversaciones).
+  3. Si todo funciona, retirar los tres roles anteriores de la identidad real, uno a uno, repitiendo la verificación.
+- **Comprobación previa:** `az role assignment list --assignee 6b88e44e-<resto> --all --subscription b6d04525-e7b4-4b17-8492-2471f9779962 -o table`.
+- **Impacto:** Copilot Studio y Search, ninguno. Web app: 403 de Foundry (que el backend devuelve como 502) si el rol no cubre alguna acción.
+- **Rollback:** volver a asignar el rol retirado.
+
+## A11. Migración a red privada
+
+**Requiere revisión senior** (red, identidad, RBAC).
+
+- **Objetivo:** que Container Apps → Foundry, Foundry → Search, Search → SQL y Search → Azure OpenAI vayan por Private Link.
+- **Plan completo:** [red-privada.md](red-privada.md), secciones 5 (fases F0–F6 con criterio y rollback) y 6 (pruebas de DNS y conectividad).
+- **Restricciones clave:**
+  - La cuenta de Foundry y el entorno de Container Apps actuales **no** admiten añadir VNet después: hay que crearlos de nuevo.
+  - Search tiene que ser S1 o superior.
+  - Copilot Studio necesita soporte de VNet de Power Platform (entorno administrado, VNets en eastus y westus): hasta entonces, `keepSearchPublic = true`.
+- **Comprobación previa:** `az deployment sub what-if` con `main.prod.bicepparam` y `enableAgentVnetInjection=false` (salida en [whatif/prod.txt](whatif/prod.txt)).
+- **Impacto:** cambio de URL e historial de conversaciones nuevo para los usuarios (avisar antes); Copilot Studio necesita la clave de consulta del Search nuevo.
+- **Rollback:** por fase (ver la tabla de red-privada.md); los recursos actuales siguen vivos hasta la fase F6.
+
+## A12. Reglas del firewall de `knowledgeserver`
+
+**Requiere revisión senior** (red).
+
+- **Objetivo:** retirar `AllowAllWindowsAzureIps` (admite tráfico desde cualquier suscripción de Azure) y las reglas `ClientIPAddress_*` antiguas.
+- **Bloqueo:** el indexador del Search Free actual llega a SQL gracias a `AllowAllWindowsAzureIps`, y Free no tiene IP de salida estable ni private endpoints. **No retirar** hasta que el indexador use la plataforma nueva (S1 con vínculo privado compartido, o Basic con indexador privado y regla de IP explícita).
+- **Comprobación previa:** `az sql server firewall-rule list --server knowledgeserver --resource-group rg-daily-enhanced-dev-centralus --subscription b6d04525-e7b4-4b17-8492-2471f9779962 -o table`.
+- **Impacto:** indexador (Copilot Studio y la web app verían contenido desactualizado), flujo de Power Automate si usa el conector SQL desde Power Platform, y accesos administrativos.
+- **Rollback:** recrear la regla.
+
+## A13. Asignaciones privilegiadas fuera del alcance de Daily (para administradores del inquilino)
+
+**Requiere revisión senior.**
+
+- Dos usuarios con **User Access Administrator en `/`** (elevación de administrador global sin retirar). Recomendación: retirarla (`az role assignment delete --role "User Access Administrator" --scope /` la ejecuta cada usuario afectado) y usar PIM.
+- El principal de servicio `2907…` tiene **Contributor** y **User Access Administrator** sobre la suscripción. Hay que identificar su origen (registro de actividad y propietario de la aplicación) antes de reducirlo al grupo de recursos (ver [matriz-rbac.md](matriz-rbac.md), 2.5).
+- **Impacto en Daily:** ninguno directo.

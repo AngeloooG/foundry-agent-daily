@@ -1,0 +1,109 @@
+# Daily Enhanced: endurecimiento de seguridad (lotes 0–7)
+
+Rama `hardening/daily-security` → `Develop-Daily`. **Borrador: no fusionar sin revisión senior.** Toca autenticación, autorización, cabeceras de seguridad, RBAC y red.
+
+## Resumen
+
+- **Aislamiento entre usuarios.** Cada conversación, mensaje, stream, aprobación MCP y archivo pertenece a quien lo creó. Si no eres el dueño, recibes **404**. El propietario es `SHA256("{tid}:{oid}")`; nunca se guarda `tid:oid` en claro.
+- **Acceso.** Cualquier usuario autenticado del inquilino CONSEIN con el scope `Chat.ReadWrite`. Política por defecto (`FallbackPolicy`) que exige token válido, `tid` del inquilino y scope. Solo son anónimos los health checks y la SPA. Sin app roles ni listas de usuarios.
+- **Endpoints eliminados:** `POST /api/files/cleanup` (permitía a cualquiera borrar las cargas de todos) y `GET /api/files/uploaded`.
+- **Backend:** rate limiting por usuario, límites de tamaño validados antes de llamar a Foundry, errores `ProblemDetails` sin detalles internos, `/api/agent` sin el prompt del agente, cabeceras de seguridad y una CSP construida con los endpoints reales (MSAL y Application Insights), y logs sin contenido de usuario.
+- **Frontend:**
+  - MSAL con `sessionStorage` y respaldo por redirección.
+  - Markdown sin imágenes externas ni protocolos peligrosos; cierra el canal de exfiltración sin clic.
+  - Validación de adjuntos.
+  - Telemetría sin conversaciones.
+- **Streaming:** reintentos idempotentes, solo antes del primer chunk y solo ante fallos transitorios. Un stream sin `done` termina en error, la interfaz nunca se queda en "respondiendo", el texto del usuario se restaura y la cancelación no se muestra como error.
+- **Dependencias:** 10 vulnerabilidades altas o críticas corregidas con parches o versiones menores. En runtime, `npm audit` queda en 0.
+- **Infraestructura:** Bicep modular de la plataforma compartida (dev y prod), validado con `what-if` sin cambios en lo existente, más el diseño de red privada y la matriz RBAC. **Nada desplegado.**
+
+## Aviso a los usuarios antes del despliegue
+
+> Con esta versión, cada conversación de Daily queda ligada a quien la creó. **Las conversaciones anteriores a la actualización no tienen propietario y dejarán de verse en Daily**: no se borran, pero ya no se pueden abrir desde la aplicación. No se asignan de forma retroactiva porque nunca se registró quién las creó.
+>
+> Otros cambios visibles: las imágenes externas en las respuestas no se muestran (es intencional), una pestaña nueva puede pedir iniciar sesión de nuevo (`sessionStorage`) y, aproximadamente una vez al día, la renovación de la sesión puede hacer una redirección completa (acción A4 para evitarlo).
+
+## Lotes
+
+| Lote | Contenido | Informe |
+|---|---|---|
+| 0 | Línea base, inventario de código y de Azure (solo lectura) y CI sin acceso a Azure (`.github/workflows/ci.yml`) | [lote-0.md](lote-0.md) |
+| 0b | Dependencias: vite, ws, postcss, browserslist, brace-expansion, zod y `@nevware21/ts-utils` (npm); Pkcs, Xml y DataProtection 10.0.14 (NuGet). Una por commit, todas publicadas hace más de 14 días | [lote-0b.md](lote-0b.md) |
+| 1 | Interfaz `IAgentFrameworkService` para sustituir Foundry en tests; `WebApplicationFactory` con autenticación de prueba (usuarios A y B) y un Foundry falso; tests objetivo de los lotes siguientes | [lote-1.md](lote-1.md) |
+| 2 | Propiedad por conversación en la metadata de Foundry; `ConversationOwnerAuthorizationHandler`; archivos autorizados por conversación (`GET /api/files/{fileId}?conversationId=`); eliminación de `ConversationStore` y de los endpoints de limpieza; `FallbackPolicy` y `MapGroup("/api")` | [lote-2.md](lote-2.md) |
+| 3 | Rate limiter por usuario (con hash), `ChatLimitsOptions`, `AttachmentProcessor` (bytes mágicos, sin HTML), `IExceptionHandler`, logging Information con clave de usuario con hash, `UseForwardedHeaders`, HSTS, CSP y cabeceras | [lote-3.md](lote-3.md) |
+| 4 | MSAL (cuenta activa, respaldo `acquireTokenRedirect`, `/redirect.html` opcional desactivado), `SafeMarkdown`, validación de adjuntos traducible, telemetría sin contenido; 44 archivos de interfaz inalcanzables y 9 dependencias sin uso eliminados; sin `legacy-peer-deps` | [lote-4.md](lote-4.md) |
+| 5 | Política de reintentos idempotente, recuperación por ids de mensaje, `ChatServiceProvider` (una instancia por sesión, cancelación al desmontar) | [lote-5.md](lote-5.md) |
+| 6 | Análisis (sin cambios en Azure): cargo y área desde Office 365 Users; indexación incremental con `rowversion`; borrado lógico; ejecución a demanda más una programación diaria; vectorizador verificado; Copilot Studio con clave de consulta dedicada. El procedimiento de ingesta queda **bloqueado** hasta que exista `docs/sql/` | [lote-6.md](lote-6.md) |
+| 7 | `infra/platform/` (10 módulos y 2 bicepparam), what-if de dev y prod, [red-privada.md](red-privada.md) y [matriz-rbac.md](matriz-rbac.md) | [lote-7.md](lote-7.md) |
+
+## Tests
+
+| Conjunto | Resultado |
+|---|---|
+| Backend (`dotnet test backend/WebApp.sln`) | **134/134**. Línea base: 51, de los que se retiraron los tests tautológicos y los de `ConversationStore` |
+| Frontend (`npm run test:run`) | **243/243** en 13 archivos. Línea base: 174 en 6 |
+| `npm run lint` / `npx tsc -b` | 0 errores. Línea base: 5 errores de lint |
+| `npm audit` | Runtime: 0. Total: 16 (2 bajas y 14 moderadas, todas de herramientas de desarrollo; la corrección exige saltos de versión mayor y queda como recomendación) |
+
+Casos de integración destacados:
+
+- B recibe 404 al leer, enviar, continuar el stream, aprobar MCP o descargar archivos de A.
+- Las conversaciones sin propietario no aparecen.
+- Cleanup no está expuesto.
+- `text/html` se rechaza.
+- Los límites se aplican antes de llamar a Foundry (también 413 en Kestrel real).
+- Las cabeceras y la CSP están presentes.
+- Los health checks son anónimos y el resto de `/api` exige autenticación.
+
+La verificación con Entra real (CSP con MSAL, `acquireTokenSilent`, redirección, pestaña nueva) es manual: [verificacion-manual.md](verificacion-manual.md).
+
+## Configuración nueva
+
+| Clave | Por defecto | Uso |
+|---|---|---|
+| `ChatLimits:*` | ver `appsettings.json` | Longitud del mensaje, cuerpo, adjuntos, texto incrustado y descarga |
+| `ChatLimits:ChatRequestsPerMinute` / `ApiRequestsPerMinute` | 20 / 120 | Rate limit por usuario (ventana de 1 minuto) |
+| `SecurityHeaders:ContentSecurityPolicy` | (construida automáticamente) | Sustituye la CSP completa |
+| `SecurityHeaders:ReportOnly` | `false` | Desplegar la CSP en modo informe para probarla sin bloquear |
+| `SecurityHeaders:AdditionalConnectSources` | vacío | Orígenes adicionales para `connect-src` |
+| `SecurityHeaders:SilentRedirectPageEnabled` y `VITE_MSAL_SILENT_REDIRECT_ENABLED` | `false` | `/redirect.html` para la renovación silenciosa (requiere A4) |
+| `APPLICATIONINSIGHTS_FRONTEND_CONNECTION_STRING` | — | De ahí se leen los hosts de ingesta que se añaden a la CSP |
+
+## Despliegue
+
+1. Revisión senior del PR (seguridad, autenticación y cabeceras).
+2. Avisar a los usuarios (texto de arriba).
+3. Desplegar en desarrollo con el flujo habitual. **Se reconstruye la imagen** (A2), así que también se actualiza el runtime de .NET.
+4. Ejecutar [verificacion-manual.md](verificacion-manual.md). Si la CSP bloquea algo inesperado, activar `SecurityHeaders__ReportOnly=true` mientras se ajusta.
+5. Producción, solo después de la verificación en desarrollo.
+
+Rollback: reactivar la revisión anterior de la Container App. Los datos no cambian (la versión anterior ignora la clave `owner` de la metadata), pero vuelven las vulnerabilidades corregidas, como el acceso a conversaciones ajenas: úsalo solo como medida temporal.
+
+## Acciones en Azure para el equipo (nada ejecutado)
+
+Detalle con comandos, comprobación previa, impacto y rollback en [acciones-azure.md](acciones-azure.md).
+
+| Acción | Tema | Revisión senior |
+|---|---|---|
+| A1 | Conexión Foundry → Search con Entra en lugar de clave | Sí |
+| A2 | Reconstruir la imagen (runtime de .NET corregido) | — |
+| A3 | Retención de imágenes subidas | — |
+| A4 | Redirect URI para la renovación silenciosa de MSAL (opcional) | Sí |
+| A5 | Búsqueda híbrida semántica en el agente (hoy `query_type: simple`) | — |
+| A6 | Copilot Studio: clave de consulta dedicada `daily-copilot-studio` y fuente duplicada | Sí |
+| A7 | Indexador a demanda desde el flujo más programación diaria | — |
+| A8 | Indexación incremental y borrado lógico en la vista | Sí |
+| A9 | Cuota de `gpt-5.1` en centralus | — |
+| A10 | Foundry User para la identidad de la web app (sin retirar nada hasta probar) | Sí |
+| A11 | Migración a red privada | Sí |
+| A12 | Firewall de `knowledgeserver` (`AllowAllWindowsAzureIps`) | Sí |
+| A13 | Asignaciones privilegiadas fuera de Daily (UAA en `/`, principal de servicio con Contributor y UAA) | Sí |
+
+## Pendientes conocidos
+
+- `docs/sql/`: exportar el procedimiento de ingesta y la vista para cerrar el análisis del lote 6.
+- `infra/main.bicep` (IaC de `azd` de la web app) sigue desalineado con lo desplegado; se reconcilia con la fase F2 de la red privada.
+- Desactivar la autenticación local en Search, Foundry o Application Insights **solo** después de un inventario que demuestre que ningún consumidor usa claves (hoy, Copilot Studio y la conexión de Foundry usan claves de Search). El componente de Application Insights del navegador mantiene la autenticación local.
+- Mensajes de error genéricos del frontend en inglés (i18n).
+- Fijar las acciones de GitHub por SHA.
