@@ -1,0 +1,135 @@
+using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
+using WebApp.Api.Models;
+using WebApp.Api.Security;
+using WebApp.Api.Services;
+
+namespace WebApp.Api.Tests.TestSupport;
+
+/// <summary>
+/// Minimal in-memory stand-in for Foundry behind <see cref="IAgentFrameworkService"/> and
+/// <see cref="IConversationOwnershipStore"/>. Conversations keep a metadata dictionary like Foundry
+/// does, and the ownership/file metadata uses the production <see cref="ConversationMetadata"/> helpers.
+/// Streams a fixed script: two text chunks, one file citation, then usage.
+/// </summary>
+public sealed class FakeFoundry : IAgentFrameworkService, IConversationOwnershipStore
+{
+    public const string CitedFileId = "file_cited";
+
+    private readonly ConcurrentDictionary<string, Dictionary<string, string>> _conversations = new();
+    private int _sequence;
+
+    public int StreamCalls;
+    public int DownloadCalls;
+    public string? LastStreamConversationId;
+    public McpApprovalResponse? LastApproval;
+
+    public IReadOnlyCollection<string> ConversationIds => _conversations.Keys.ToList();
+
+    public IReadOnlyDictionary<string, string> MetadataOf(string conversationId) => _conversations[conversationId];
+
+    /// <summary>Adds a conversation as if it had been created before ownership existed (no owner).</summary>
+    public void SeedLegacyConversation(string id, string title) =>
+        _conversations[id] = new Dictionary<string, string> { [ConversationMetadata.TitleKey] = title };
+
+    public PreparedAttachments? LastAttachments;
+    public Exception? FailAfterFirstChunk { get; set; }
+
+    public async IAsyncEnumerable<StreamChunk> StreamMessageAsync(
+        string conversationId,
+        string message,
+        PreparedAttachments attachments,
+        McpApprovalResponse? mcpApproval = null,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        Interlocked.Increment(ref StreamCalls);
+        LastStreamConversationId = conversationId;
+        LastApproval = mcpApproval;
+        LastAttachments = attachments;
+
+        yield return StreamChunk.Text("Hola");
+        if (FailAfterFirstChunk is not null)
+        {
+            throw FailAfterFirstChunk;
+        }
+        yield return StreamChunk.Text(" mundo");
+        yield return StreamChunk.WithAnnotations([new AnnotationInfo { Type = "file_citation", Label = "Caso", FileId = CitedFileId }]);
+        await Task.CompletedTask;
+    }
+
+    public Task<string> CreateConversationAsync(string ownerKey, string? firstMessage = null, CancellationToken cancellationToken = default)
+    {
+        var id = $"conv_{Interlocked.Increment(ref _sequence):D4}";
+        _conversations[id] = ConversationMetadata.ForNewConversation(ownerKey, firstMessage);
+        return Task.FromResult(id);
+    }
+
+    public Task<List<ConversationSummary>> ListConversationsAsync(string ownerKey, int limit = 20, CancellationToken cancellationToken = default) =>
+        Task.FromResult(_conversations
+            .Where(c => c.Value.TryGetValue(ConversationMetadata.OwnerKey, out var owner) && ConversationMetadata.KeysMatch(owner, ownerKey))
+            .OrderByDescending(c => c.Key)
+            .Take(limit + 1)
+            .Select(c => new ConversationSummary { Id = c.Key, Title = c.Value.GetValueOrDefault(ConversationMetadata.TitleKey) })
+            .ToList());
+
+    public Task<List<ConversationMessageInfo>> GetConversationMessagesAsync(string conversationId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(new List<ConversationMessageInfo> { new() { Role = "user", Content = "historial" } });
+
+    public Task DeleteConversationAsync(string conversationId, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("Conversation deletion is not yet supported by the Azure.AI.Projects SDK.");
+
+    /// <summary>Size Foundry reports for the cited file (bytes). Default: the 9 bytes of "contenido".</summary>
+    public long CitedFileSize { get; set; } = 9;
+
+    public string CitedFileName { get; set; } = "reporte.csv";
+
+    /// <summary>Times the file content was actually produced (after the size check).</summary>
+    public int ContentLoads;
+
+    public Task<(BinaryData Content, string FileName)> DownloadFileAsync(string fileId, string? containerId, long maxBytes, CancellationToken cancellationToken = default)
+    {
+        Interlocked.Increment(ref DownloadCalls);
+
+        // Same rule as AgentFrameworkService: a size known to exceed the limit is rejected before
+        // any content is loaded.
+        DownloadLimits.EnsureWithinLimit(CitedFileSize, maxBytes);
+
+        Interlocked.Increment(ref ContentLoads);
+        var content = CitedFileSize == 9 ? BinaryData.FromString("contenido") : BinaryData.FromBytes(new byte[CitedFileSize]);
+        return Task.FromResult((content, CitedFileName));
+    }
+
+    public Task<AgentMetadataResponse> GetAgentMetadataAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(new AgentMetadataResponse
+        {
+            Id = "Daily-Enhanced",
+            Object = "agent",
+            CreatedAt = 1,
+            Name = "Daily",
+            Model = "gpt-test",
+            // Same filtering as AgentFrameworkService (instructions are no longer part of the DTO).
+            Metadata = AgentFrameworkService.FilterPublicMetadata(new Dictionary<string, string> { ["logo"] = "daily.svg", ["internal"] = "x" }),
+            StarterPrompts = ["Hola"]
+        });
+
+    public Task<string> GetAgentInfoAsync(CancellationToken cancellationToken = default) => Task.FromResult("Daily");
+
+    public (int InputTokens, int OutputTokens, int TotalTokens)? GetLastUsage() => (10, 5, 15);
+
+    // ===== IConversationOwnershipStore =====
+
+    public Task<string?> GetOwnerAsync(string conversationId, CancellationToken cancellationToken) =>
+        Task.FromResult(_conversations.TryGetValue(conversationId, out var metadata)
+            ? metadata.GetValueOrDefault(ConversationMetadata.OwnerKey)
+            : null);
+
+    public Task AddAuthorizedFilesAsync(string conversationId, IReadOnlyCollection<AuthorizedFile> files, CancellationToken cancellationToken)
+    {
+        _conversations[conversationId] = ConversationMetadata.WithFiles(_conversations[conversationId], files);
+        return Task.CompletedTask;
+    }
+
+    public Task<bool> IsFileAuthorizedAsync(string conversationId, string fileId, string? containerId, CancellationToken cancellationToken) =>
+        Task.FromResult(_conversations.TryGetValue(conversationId, out var metadata)
+            && ConversationMetadata.ContainsFile(metadata, fileId, containerId));
+}

@@ -4,16 +4,32 @@ import {
   useState,
   type KeyboardEvent,
 } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import rehypeSanitize from 'rehype-sanitize';
-
 import type { DailyTranslation } from '../../config/dailyTranslations';
 import type { IChatItem, IFileAttachment } from '../../types/chat';
 import type { AppState } from '../../types/appState';
 import type { AppError } from '../../types/errors';
+import {
+  ACCEPTED_FILE_TYPES,
+  validateAttachmentSelection,
+  type AttachmentIssue,
+} from '../../utils/fileAttachments';
 import { DailyLogo } from './DailyLogo';
+import { SafeMarkdown } from './SafeMarkdown';
 import styles from './DailyChatInterface.module.css';
+
+/** Renders attachment issues with the translated templates ({fileName}, {max}, {maxMb}). */
+function describeIssues(issues: AttachmentIssue[], t: DailyTranslation): string {
+  return issues
+    .map((issue) =>
+      Object.entries(issue)
+        .filter(([key]) => key !== 'code')
+        .reduce(
+          (text, [key, value]) => text.replaceAll(`{${key}}`, String(value)),
+          t.chat.attachmentErrors[issue.code] as string
+        )
+    )
+    .join(' ');
+}
 
 interface DailyChatInterfaceProps {
   t: DailyTranslation;
@@ -69,6 +85,9 @@ export function DailyChatInterface({
 }: DailyChatInterfaceProps) {
   const [input, setInput] = useState(recoveredInput || '');
   const [files, setFiles] = useState<File[]>([]);
+  const [attachmentIssues, setAttachmentIssues] = useState<AttachmentIssue[]>([]);
+  // Files of the last submitted message, restored together with the text if the send fails.
+  const lastSubmittedFilesRef = useRef<File[]>([]);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -103,6 +122,7 @@ export function DailyChatInterface({
     }
 
     setInput(recoveredInput);
+    setFiles(lastSubmittedFilesRef.current);
     onRecoveredInputConsumed?.();
   }, [recoveredInput, onRecoveredInputConsumed]);
 
@@ -149,6 +169,14 @@ export function DailyChatInterface({
       return;
     }
 
+    // Validate before sending so an invalid attachment never clears what the user typed.
+    const issues = validateAttachmentSelection(files);
+    if (issues.length > 0) {
+      setAttachmentIssues(issues);
+      return;
+    }
+
+    lastSubmittedFilesRef.current = files;
     onSendMessage(
       value,
       files.length > 0 ? files : undefined
@@ -156,6 +184,7 @@ export function DailyChatInterface({
 
     setInput('');
     setFiles([]);
+    setAttachmentIssues([]);
   };
 
   const handleKeyDown = (
@@ -168,20 +197,19 @@ export function DailyChatInterface({
   };
 
   const handleFiles = (fileList: FileList | null) => {
-    if (!fileList) {
+    if (!fileList || fileList.length === 0) {
       return;
     }
 
-    setFiles((current) => [
-      ...current,
-      ...Array.from(fileList),
-    ]);
+    const next = [...files, ...Array.from(fileList)];
+    setFiles(next);
+    setAttachmentIssues(validateAttachmentSelection(next));
   };
 
   const removeFile = (index: number) => {
-    setFiles((current) =>
-      current.filter((_, currentIndex) => currentIndex !== index)
-    );
+    const next = files.filter((_, currentIndex) => currentIndex !== index);
+    setFiles(next);
+    setAttachmentIssues(validateAttachmentSelection(next));
   };
 
   return (
@@ -272,12 +300,7 @@ export function DailyChatInterface({
                       )}
 
                       <div className={styles.markdown}>
-                        <ReactMarkdown
-                          remarkPlugins={[remarkGfm]}
-                          rehypePlugins={[rehypeSanitize]}
-                        >
-                          {message.content || ''}
-                        </ReactMarkdown>
+                        <SafeMarkdown content={message.content || ''} />
                       </div>
 
                       {!isUser && !isCurrentStreaming && (
@@ -365,6 +388,18 @@ export function DailyChatInterface({
           </div>
         )}
 
+        {attachmentIssues.length > 0 && (
+          <div className={styles.errorBar} role="alert">
+            <span>{describeIssues(attachmentIssues, t)}</span>
+            <button
+              type="button"
+              onClick={() => setAttachmentIssues([])}
+            >
+              {t.chat.actions.close}
+            </button>
+          </div>
+        )}
+
         {isEditing && (
           <div className={styles.editBar}>
             <span>{t.chat.editingMode}</span>
@@ -412,6 +447,7 @@ export function DailyChatInterface({
               onChange={(event) => setInput(event.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={t.chat.placeholder}
+              aria-label={t.chat.placeholder}
               rows={1}
               disabled={isBusy}
             />
@@ -429,7 +465,7 @@ export function DailyChatInterface({
                 type="button"
                 className={styles.sendButton}
                 onClick={submit}
-                disabled={!input.trim() || isSending}
+                disabled={!input.trim() || isSending || attachmentIssues.length > 0}
               >
                 {t.chat.actions.send}
               </button>
@@ -440,9 +476,12 @@ export function DailyChatInterface({
               type="file"
               multiple
               hidden
-              onChange={(event) =>
-                handleFiles(event.target.files)
-              }
+              accept={ACCEPTED_FILE_TYPES}
+              onChange={(event) => {
+                handleFiles(event.target.files);
+                // Reset so selecting the same file again still fires onChange.
+                event.target.value = '';
+              }}
             />
           </div>
         </footer>

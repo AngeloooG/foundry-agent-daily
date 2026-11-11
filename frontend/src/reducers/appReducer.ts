@@ -357,9 +357,15 @@ export const appReducer = (state: AppState, action: AppAction): AppState => {
     }
 
     case 'CHAT_RECOVER_MESSAGE': {
-      const recoveredMessages = state.chat.messages.length >= 2
-        ? state.chat.messages.slice(0, -2)
-        : [];
+      const idsToRemove = action.messageIds;
+      const recoveredMessages = idsToRemove
+        ? state.chat.messages.filter(msg => !idsToRemove.includes(msg.id))
+        : state.chat.messages.length >= 2
+          ? state.chat.messages.slice(0, -2)
+          : [];
+      const attemptsNote = action.retryCount > 1
+        ? `Failed to get a response after ${action.retryCount} attempts.`
+        : action.error.message;
       return {
         ...state,
         chat: {
@@ -370,7 +376,7 @@ export const appReducer = (state: AppState, action: AppAction): AppState => {
           recoveredInput: action.messageText,
           error: {
             ...action.error,
-            message: `Failed to get a response after ${action.retryCount} ${action.retryCount === 1 ? 'attempt' : 'attempts'}. Your message has been restored.`,
+            message: `${attemptsNote} Your message has been restored.`,
             recoverable: true,
           },
         },

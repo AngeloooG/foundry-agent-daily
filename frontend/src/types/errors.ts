@@ -6,8 +6,10 @@ export type ErrorCode =
   | 'NETWORK'      // Connection/fetch failures, 5xx errors
   | 'AUTH'         // 401/403 authentication errors
   | 'STREAM'       // SSE streaming errors
-  | 'SERVER'       // 400/500 server response errors
+  | 'SERVER'       // 5xx and unexpected server responses
   | 'API'          // REST API errors (conversation management, etc.)
+  | 'VALIDATION'   // 400/413: the message or its attachments were rejected (server explains why)
+  | 'RATE_LIMIT'   // 429: too many requests for this user
   | 'UNKNOWN';     // Unclassified errors
 
 export interface AppError {
@@ -19,6 +21,8 @@ export interface AppError {
     handler: () => void;
   };
   originalError?: Error;
+  /** HTTP status of the failed request, when the error came from an HTTP response. */
+  status?: number;
 }
 
 /**
@@ -30,6 +34,8 @@ export const ERROR_MESSAGES: Record<ErrorCode, string> = {
   STREAM: 'The response was interrupted. Click Retry to continue your conversation.',
   SERVER: 'The server encountered an error. This has been logged and our team will investigate.',
   API: 'The request failed. Please try again.',
+  VALIDATION: 'The message or its attachments could not be accepted. Please review them and try again.',
+  RATE_LIMIT: 'You have sent too many messages in a short time. Please wait a moment and try again.',
   UNKNOWN: 'An unexpected error occurred. Please try again or contact support if the issue persists.',
 };
 
@@ -61,6 +67,16 @@ export const DETAILED_ERROR_MESSAGES: Record<ErrorCode, { title: string; descrip
     title: 'Request Failed',
     description: 'The API request could not be completed.',
     hint: 'Please try again.'
+  },
+  VALIDATION: {
+    title: 'Invalid Request',
+    description: 'The message or its attachments could not be accepted.',
+    hint: 'Review the message and attachments and try again.'
+  },
+  RATE_LIMIT: {
+    title: 'Too Many Requests',
+    description: 'You have sent too many messages in a short time.',
+    hint: 'Please wait a moment and try again.'
   },
   UNKNOWN: {
     title: 'Unexpected Error',

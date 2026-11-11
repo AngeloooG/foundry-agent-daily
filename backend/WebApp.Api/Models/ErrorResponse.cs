@@ -79,6 +79,7 @@ public static class ErrorResponseFactory
             404 => "Not Found",
             429 => "Too Many Requests",
             500 => "Service Temporarily Unavailable",
+            502 => "AI Service Error",
             503 => "Service Unavailable",
             _ => "An Error Occurred"
         };
@@ -93,6 +94,9 @@ public static class ErrorResponseFactory
             500 => isDevelopment 
                 ? exception.Message 
                 : "An unexpected error occurred. Our team has been notified. Please try again later.",
+            502 => isDevelopment
+                ? exception.Message
+                : "The AI service could not complete the request. Please try again in a few moments.",
             503 => "The service is temporarily unavailable. Please try again in a few moments.",
             _ => isDevelopment 
                 ? exception.Message 

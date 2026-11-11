@@ -1,80 +1,49 @@
 import { useMsal } from "@azure/msal-react";
-import { InteractionRequiredAuthError } from "@azure/msal-browser";
-import { tokenRequest } from "../config/authConfig";
+import { silentTokenRequest, tokenRequest } from "../config/authConfig";
+import { requiresRedirectFallback } from "../utils/authFallback";
 import { useCallback, useMemo } from "react";
 
 /**
  * Authentication hook for MSAL-based authentication.
- * Provides token acquisition and authentication status.
- * 
- * @returns Object with getAccessToken function, authentication status, and user info
- * 
+ *
+ * Token acquisition: `acquireTokenSilent` first (cached token or refresh token; hidden iframe when
+ * the refresh token expired). When interaction is required, or the silent iframe fails/times out
+ * (the CSP forbids framing the app), it falls back to `acquireTokenRedirect`, which navigates away
+ * and completes the request when the app reloads. No popups (often blocked), no tokens or claims logged.
+ *
  * @example
  * ```tsx
- * function ProtectedComponent() {
- *   const { getAccessToken, isAuthenticated, user } = useAuth();
- *   
- *   useEffect(() => {
- *     const fetchData = async () => {
- *       const token = await getAccessToken();
- *       if (token) {
- *         // Make authenticated API call
- *       }
- *     };
- *     fetchData();
- *   }, [getAccessToken]);
- *   
- *   if (!isAuthenticated) return <div>Please sign in</div>;
- *   return <div>Welcome, {user?.name}</div>;
- * }
+ * const { getAccessToken } = useAuth();
+ * const token = await getAccessToken(); // null while redirecting or on failure
  * ```
  */
 export const useAuth = () => {
   const { instance, accounts } = useMsal();
 
   const getAccessToken = useCallback(async (): Promise<string | null> => {
-    if (accounts.length === 0) {
+    // Prefer the active account set at sign-in (main.tsx); fall back to the first cached one.
+    const account = instance.getActiveAccount() ?? accounts[0];
+    if (!account) {
       return null;
     }
 
-    const request = {
-      ...tokenRequest,
-      account: accounts[0],
-    };
-
     try {
-      // Try silent token acquisition first (uses cached token if valid)
-      const response = await instance.acquireTokenSilent(request);
+      const response = await instance.acquireTokenSilent({ ...silentTokenRequest, account });
       return response.accessToken;
     } catch (error) {
-      if (error instanceof InteractionRequiredAuthError) {
-        // Fallback to interactive login if silent fails
-        console.warn(
-          "Silent token acquisition failed, prompting for interaction"
-        );
-        try {
-          const response = await instance.acquireTokenPopup(request);
-          return response.accessToken;
-        } catch (popupError) {
-          console.error("Popup login failed:", popupError);
-          return null;
-        }
+      if (requiresRedirectFallback(error)) {
+        // Full-page redirect (never uses the silent redirect page).
+        await instance.acquireTokenRedirect({ ...tokenRequest, account });
+        return null;
       }
-      console.error("Token acquisition error:", error);
+      console.error("Token acquisition failed");
       return null;
     }
   }, [instance, accounts]);
 
-  // Memoize computed values
-  const isAuthenticated = useMemo(
-    () => accounts.length > 0,
-    [accounts.length]
-  );
+  const isAuthenticated = useMemo(() => accounts.length > 0, [accounts.length]);
 
-  const user = useMemo(
-    () => accounts[0],
-    [accounts]
-  );
+  const user = useMemo(() => instance.getActiveAccount() ?? accounts[0], [instance, accounts]);
 
   return useMemo(
     () => ({

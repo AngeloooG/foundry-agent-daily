@@ -1,0 +1,74 @@
+WARNING: A new Bicep release is available: v0.49.2. Upgrade now by running "az bicep upgrade".
+WARNING: A new Bicep release is available: v0.49.2. Upgrade now by running "az bicep upgrade".
+Note: The result may contain false positive predictions (noise).
+You can help us improve the accuracy of the result by opening an issue here: https://aka.ms/WhatIfIssues
+
+Resource and property changes are indicated with these symbols:
+  + Create
+  x Unsupported
+
+The deployment will update the following scopes:
+
+Scope: /
+
+
+
+
+
+
+
+Scope: /subscriptions/b6d04525-e7b4-4b17-8492-2471f9779962
+
+  + resourceGroups/rg-daily-prod-centralus
+
+Scope: /subscriptions/b6d04525-e7b4-4b17-8492-2471f9779962/resourceGroups/rg-daily-prod-centralus
+
+  + Microsoft.CognitiveServices/accounts/ais-daily-prod-sm5vh
+  + Microsoft.CognitiveServices/accounts/ais-daily-prod-sm5vh/projects/proj-daily-prod
+  + Microsoft.CognitiveServices/accounts/ais-daily-prod-sm5vh/projects/proj-daily-prod/connections/search-daily
+  + Microsoft.CognitiveServices/accounts/ais-daily-prod-sm5vh/providers/Microsoft.Insights/diagnosticSettings/to-log-analytics
+  + Microsoft.Insights/components/appi-daily-prod
+  + Microsoft.Insights/scheduledQueryRules/alert-daily-prod-indexer-failures
+  + Microsoft.KeyVault/vaults/kv-daily-prod-sm5vh
+  + Microsoft.KeyVault/vaults/kv-daily-prod-sm5vh/providers/Microsoft.Insights/diagnosticSettings/to-log-analytics
+  + Microsoft.ManagedIdentity/userAssignedIdentities/id-web-daily-prod
+  + Microsoft.Network/privateDnsZones/privatelink.cognitiveservices.azure.com
+  + Microsoft.Network/privateDnsZones/privatelink.cognitiveservices.azure.com/virtualNetworkLinks/link-vnet-daily-prod
+  + Microsoft.Network/privateDnsZones/privatelink.database.windows.net
+  + Microsoft.Network/privateDnsZones/privatelink.database.windows.net/virtualNetworkLinks/link-vnet-daily-prod
+  + Microsoft.Network/privateDnsZones/privatelink.openai.azure.com
+  + Microsoft.Network/privateDnsZones/privatelink.openai.azure.com/virtualNetworkLinks/link-vnet-daily-prod
+  + Microsoft.Network/privateDnsZones/privatelink.search.windows.net
+  + Microsoft.Network/privateDnsZones/privatelink.search.windows.net/virtualNetworkLinks/link-vnet-daily-prod
+  + Microsoft.Network/privateDnsZones/privatelink.services.ai.azure.com
+  + Microsoft.Network/privateDnsZones/privatelink.services.ai.azure.com/virtualNetworkLinks/link-vnet-daily-prod
+  + Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net
+  + Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net/virtualNetworkLinks/link-vnet-daily-prod
+  + Microsoft.Network/privateEndpoints/pe-ais-daily-prod-sm5vh
+  + Microsoft.Network/privateEndpoints/pe-ais-daily-prod-sm5vh/privateDnsZoneGroups/default
+  + Microsoft.Network/privateEndpoints/pe-kv-daily-prod-sm5vh
+  + Microsoft.Network/privateEndpoints/pe-kv-daily-prod-sm5vh/privateDnsZoneGroups/default
+  + Microsoft.Network/privateEndpoints/pe-sql-daily-prod-sm5vh
+  + Microsoft.Network/privateEndpoints/pe-sql-daily-prod-sm5vh/privateDnsZoneGroups/default
+  + Microsoft.Network/privateEndpoints/pe-srch-daily-prod-sm5vh
+  + Microsoft.Network/privateEndpoints/pe-srch-daily-prod-sm5vh/privateDnsZoneGroups/default
+  + Microsoft.Network/virtualNetworks/vnet-daily-prod
+  + Microsoft.OperationalInsights/workspaces/log-daily-prod
+  + Microsoft.Search/searchServices/srch-daily-prod-sm5vh
+  + Microsoft.Search/searchServices/srch-daily-prod-sm5vh/providers/Microsoft.Insights/diagnosticSettings/to-log-analytics
+  + Microsoft.Search/searchServices/srch-daily-prod-sm5vh/sharedPrivateLinkResources/spl-foundry
+  + Microsoft.Search/searchServices/srch-daily-prod-sm5vh/sharedPrivateLinkResources/spl-sql
+  + Microsoft.Sql/servers/sql-daily-prod-sm5vh
+  + Microsoft.Sql/servers/sql-daily-prod-sm5vh/auditingSettings/default
+  + Microsoft.Sql/servers/sql-daily-prod-sm5vh/databases/master/providers/Microsoft.Insights/diagnosticSettings/sql-audit-to-log-analytics
+  + Microsoft.Sql/servers/sql-daily-prod-sm5vh/databases/sqldb-daily-knowledge
+
+Resource changes: 40 to create, 5 unsupported.
+
+Diagnostics (5): 
+[extensionResourceId('/subscriptions/b6d04525-e7b4-4b17-8492-2471f9779962/resourceGroups/rg-daily-prod-centralus/providers/Microsoft.CognitiveServices/accounts/ais-daily-prod-sm5vh/projects/proj-daily-prod', 'Microsoft.Authorization/roleAssignments', guid('/subscriptions/b6d04525-e7b4-4b17-8492-2471f9779962/resourceGroups/rg-daily-prod-centralus/providers/Microsoft.CognitiveServices/accounts/ais-daily-prod-sm5vh/projects/proj-daily-prod', reference('/subscriptions/b6d04525-e7b4-4b17-8492-2471f9779962/resourceGroups/rg-daily-prod-centralus/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-web-daily-prod', '2023-01-31').principalId, '53ca6127-db72-4b80-b1b0-d745d6d5456d'))] (Unsupported) Changes to the resource declared at 'properties.template.resources[8].properties.template.resources[0]' on line 1 and column 39244 cannot be analyzed because its resource ID or API version cannot be calculated until the deployment is under way. Please see https://aka.ms/WhatIfUnidentifiableResource for more guidance.
+[extensionResourceId('/subscriptions/b6d04525-e7b4-4b17-8492-2471f9779962/resourceGroups/rg-daily-prod-centralus/providers/Microsoft.Insights/components/appi-daily-prod', 'Microsoft.Authorization/roleAssignments', guid('/subscriptions/b6d04525-e7b4-4b17-8492-2471f9779962/resourceGroups/rg-daily-prod-centralus/providers/Microsoft.Insights/components/appi-daily-prod', reference('/subscriptions/b6d04525-e7b4-4b17-8492-2471f9779962/resourceGroups/rg-daily-prod-centralus/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-web-daily-prod', '2023-01-31').principalId, '3913510d-42f4-4e42-8a64-420c390055eb'))] (Unsupported) Changes to the resource declared at 'properties.template.resources[8].properties.template.resources[1]' on line 1 and column 39902 cannot be analyzed because its resource ID or API version cannot be calculated until the deployment is under way. Please see https://aka.ms/WhatIfUnidentifiableResource for more guidance.
+[extensionResourceId('/subscriptions/b6d04525-e7b4-4b17-8492-2471f9779962/resourceGroups/rg-daily-prod-centralus/providers/Microsoft.Search/searchServices/srch-daily-prod-sm5vh', 'Microsoft.Authorization/roleAssignments', guid('/subscriptions/b6d04525-e7b4-4b17-8492-2471f9779962/resourceGroups/rg-daily-prod-centralus/providers/Microsoft.Search/searchServices/srch-daily-prod-sm5vh', reference('/subscriptions/b6d04525-e7b4-4b17-8492-2471f9779962/resourceGroups/rg-daily-prod-centralus/providers/Microsoft.CognitiveServices/accounts/ais-daily-prod-sm5vh/projects/proj-daily-prod', '2025-06-01', 'full').identity.principalId, '1407120a-92aa-4202-b7e9-c0e197c71c8f'))] (Unsupported) Changes to the resource declared at 'properties.template.resources[8].properties.template.resources[2]' on line 1 and column 40484 cannot be analyzed because its resource ID or API version cannot be calculated until the deployment is under way. Please see https://aka.ms/WhatIfUnidentifiableResource for more guidance.
+[extensionResourceId('/subscriptions/b6d04525-e7b4-4b17-8492-2471f9779962/resourceGroups/rg-daily-prod-centralus/providers/Microsoft.CognitiveServices/accounts/ais-daily-prod-sm5vh', 'Microsoft.Authorization/roleAssignments', guid('/subscriptions/b6d04525-e7b4-4b17-8492-2471f9779962/resourceGroups/rg-daily-prod-centralus/providers/Microsoft.CognitiveServices/accounts/ais-daily-prod-sm5vh', reference('/subscriptions/b6d04525-e7b4-4b17-8492-2471f9779962/resourceGroups/rg-daily-prod-centralus/providers/Microsoft.Search/searchServices/srch-daily-prod-sm5vh', '2025-05-01', 'full').identity.principalId, '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd'))] (Unsupported) Changes to the resource declared at 'properties.template.resources[8].properties.template.resources[3]' on line 1 and column 41070 cannot be analyzed because its resource ID or API version cannot be calculated until the deployment is under way. Please see https://aka.ms/WhatIfUnidentifiableResource for more guidance.
+[extensionResourceId('/subscriptions/b6d04525-e7b4-4b17-8492-2471f9779962/resourceGroups/rg-daily-prod-centralus/providers/Microsoft.Sql/servers/sql-daily-prod-sm5vh', 'Microsoft.Authorization/roleAssignments', guid('/subscriptions/b6d04525-e7b4-4b17-8492-2471f9779962/resourceGroups/rg-daily-prod-centralus/providers/Microsoft.Sql/servers/sql-daily-prod-sm5vh', reference('/subscriptions/b6d04525-e7b4-4b17-8492-2471f9779962/resourceGroups/rg-daily-prod-centralus/providers/Microsoft.Search/searchServices/srch-daily-prod-sm5vh', '2025-05-01', 'full').identity.principalId, 'acdd72a7-3385-48ef-bd42-f606fba81ae7'))] (Unsupported) Changes to the resource declared at 'properties.template.resources[8].properties.template.resources[4]' on line 1 and column 41630 cannot be analyzed because its resource ID or API version cannot be calculated until the deployment is under way. Please see https://aka.ms/WhatIfUnidentifiableResource for more guidance.
+

@@ -6,6 +6,7 @@ import {
 
 import type {
   DailyLang,
+  DailyTranslation,
 } from '../../config/dailyTranslations';
 
 import { DailyLogo } from './DailyLogo';
@@ -16,7 +17,7 @@ interface DailyHeaderProps {
   setLang: (lang: DailyLang) => void;
   dark: boolean;
   setDark: (value: boolean) => void;
-  t: any;
+  t: DailyTranslation;
 }
 
 interface NavigationItem {

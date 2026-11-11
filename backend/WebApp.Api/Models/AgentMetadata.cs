@@ -1,7 +1,8 @@
 namespace WebApp.Api.Models;
 
 /// <summary>
-/// Agent metadata response model matching Azure sample pattern
+/// Public agent metadata returned to the SPA. Visible to every signed-in user, so it never carries
+/// the agent instructions (system prompt) and only allowlisted metadata keys.
 /// </summary>
 public record AgentMetadataResponse
 {
@@ -11,7 +12,6 @@ public record AgentMetadataResponse
     public required string Name { get; init; }
     public string? Description { get; init; }
     public required string Model { get; init; }
-    public string? Instructions { get; init; }
     public Dictionary<string, string>? Metadata { get; init; }
     
     /// <summary>
