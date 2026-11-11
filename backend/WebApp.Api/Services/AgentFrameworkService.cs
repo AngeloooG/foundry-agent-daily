@@ -7,9 +7,11 @@ using OpenAI.Files;
 using OpenAI.Responses;
 using Microsoft.Identity.Client;
 using Microsoft.Identity.Web;
+using System.ClientModel;
 using System.Runtime.CompilerServices;
 using System.Text;
 using WebApp.Api.Models;
+using WebApp.Api.Security;
 
 namespace WebApp.Api.Services;
 
@@ -23,8 +25,11 @@ namespace WebApp.Api.Services;
 /// metadata and ProjectResponsesClient for streaming (required for annotations, MCP approvals).
 /// See .github/skills/researching-azure-ai-sdk/SKILL.md for SDK patterns.
 /// </remarks>
-public class AgentFrameworkService : IAgentFrameworkService, IDisposable
+public class AgentFrameworkService : IAgentFrameworkService, IConversationOwnershipStore, IDisposable
 {
+    /// <summary>Upper bound of conversations scanned when listing (ownership is filtered app-side).</summary>
+    internal const int MaxConversationsScanned = 500;
+
     private readonly string _agentEndpoint;
     private readonly string _agentId;
     /// <summary>
@@ -37,7 +42,6 @@ public class AgentFrameworkService : IAgentFrameworkService, IDisposable
     /// </summary>
     private readonly string? _configuredAgentVersion;
     private readonly ILogger<AgentFrameworkService> _logger;
-    private readonly ConversationStore _conversationStore;
     private readonly IHttpContextAccessor? _httpContextAccessor;
     private readonly string? _backendClientId;
     private readonly string? _tenantId;
@@ -55,8 +59,9 @@ public class AgentFrameworkService : IAgentFrameworkService, IDisposable
     private readonly IHttpClientFactory _httpClientFactory;
 
     /// <summary>
-    /// Prefix applied to image files this web app uploads to the Foundry Files API,
-    /// used by the cleanup endpoint to scope deletes to files owned by this app.
+    /// Prefix applied to image files this web app uploads to the Foundry Files API, so they can be
+    /// told apart from other files in the shared Foundry project (retention is an operational task;
+    /// there is no public cleanup endpoint).
     /// </summary>
     public const string WebAppUploadFilenamePrefix = "webapp-upload-";
 
@@ -74,7 +79,6 @@ public class AgentFrameworkService : IAgentFrameworkService, IDisposable
         _logger = logger;
         _httpClientFactory = httpClientFactory;
         _httpContextAccessor = httpContextAccessor;
-        _conversationStore = new ConversationStore();
 
         _agentEndpoint = configuration["AI_AGENT_ENDPOINT"]
             ?? throw new InvalidOperationException("AI_AGENT_ENDPOINT is not configured");
@@ -365,19 +369,8 @@ public class AgentFrameworkService : IAgentFrameworkService, IDisposable
             options.InputItems.Add(userMessage);
         }
 
-        _conversationStore.EnsureConversation(conversationId, message);
-        if (!string.IsNullOrEmpty(previousResponseId) && mcpApproval != null)
-        {
-            _logger.LogInformation("Skipping user message persistence for MCP approval resume conversation {ConversationId}", conversationId);
-        }
-        else if (!string.IsNullOrWhiteSpace(message))
-        {
-            _conversationStore.AddMessage(conversationId, "user", message);
-        }
-
         // Dictionary to collect file search results for quote extraction
         var fileSearchQuotes = new Dictionary<string, string>();
-        var assistantText = new StringBuilder();
         // Track the current response ID for MCP approval resume flow
         string? currentResponseId = null;
 
@@ -396,7 +389,6 @@ public class AgentFrameworkService : IAgentFrameworkService, IDisposable
 
             if (update is StreamingResponseOutputTextDeltaUpdate deltaUpdate)
             {
-                assistantText.Append(deltaUpdate.Delta);
                 yield return StreamChunk.Text(deltaUpdate.Delta);
             }
             else if (update is StreamingResponseOutputItemDoneUpdate itemDoneUpdate)
@@ -479,11 +471,6 @@ public class AgentFrameworkService : IAgentFrameworkService, IDisposable
             {
                 _logger.LogDebug("Unhandled stream update type: {Type}", update.GetType().Name);
             }
-        }
-
-        if (assistantText.Length > 0)
-        {
-            _conversationStore.AddMessage(conversationId, "assistant", assistantText.ToString());
         }
 
         _logger.LogInformation("Completed streaming for conversation: {ConversationId}", conversationId);
@@ -821,112 +808,112 @@ public class AgentFrameworkService : IAgentFrameworkService, IDisposable
     }
 
     /// <summary>
-    /// Create a new conversation for the agent.
-    /// Uses ProjectConversation from Azure.AI.Projects for server-managed state.
+    /// Create a new conversation owned by <paramref name="ownerKey"/> (stored in Foundry metadata).
+    /// Foundry failures propagate: there is no local fallback (the previous in-process store never
+    /// persisted across requests and returned ids that Foundry did not know).
     /// </summary>
-    public async Task<string> CreateConversationAsync(string? firstMessage = null, CancellationToken cancellationToken = default)
+    public async Task<string> CreateConversationAsync(string ownerKey, string? firstMessage = null, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        try
+        var conversationOptions = new ProjectConversationCreationOptions();
+        foreach (var (key, value) in ConversationMetadata.ForNewConversation(ownerKey, firstMessage))
         {
-            _logger.LogInformation("Creating new conversation");
-            
-            ProjectConversationCreationOptions conversationOptions = new();
-
-            if (!string.IsNullOrEmpty(firstMessage))
-            {
-                // Store title in metadata (truncate to 50 chars)
-                var title = firstMessage.Length > 50 
-                    ? firstMessage[..50] + "..."
-                    : firstMessage;
-                conversationOptions.Metadata["title"] = title;
-            }
-
-            try
-            {
-                ProjectConversation conversation
-                    = await GetProjectClient().ProjectOpenAIClient.GetProjectConversationsClient().CreateProjectConversationAsync(
-                        conversationOptions,
-                        cancellationToken);
-
-                _conversationStore.EnsureConversation(conversation.Id, firstMessage);
-
-                _logger.LogInformation(
-                    "Created conversation: {ConversationId}",
-                    conversation.Id);
-                return conversation.Id;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Foundry conversation creation failed; using in-process fallback conversation store");
-                return _conversationStore.CreateConversation(firstMessage);
-            }
+            conversationOptions.Metadata[key] = value;
         }
-        catch (OperationCanceledException)
-        {
-            _logger.LogWarning("Conversation creation was cancelled");
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to create conversation");
-            throw;
-        }
+
+        ProjectConversation conversation = await Conversations.CreateProjectConversationAsync(conversationOptions, cancellationToken);
+        _logger.LogInformation("Created conversation: {ConversationId}", conversation.Id);
+        return conversation.Id;
     }
 
     /// <summary>
-    /// List conversations for the current agent.
+    /// List the caller's conversations for the current agent version. Ownership is filtered here
+    /// (Foundry cannot filter by metadata); at most <see cref="MaxConversationsScanned"/> are scanned.
+    /// Returns up to limit+1 items so the caller can detect another page.
     /// </summary>
-    public async Task<List<ConversationSummary>> ListConversationsAsync(int limit = 20, CancellationToken cancellationToken = default)
+    public async Task<List<ConversationSummary>> ListConversationsAsync(string ownerKey, int limit = 20, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
+        var resolvedAgent = await GetAgentAsync(cancellationToken);
+        var resolvedVersion = _configuredAgentVersion ?? resolvedAgent.Version;
+
+        var conversations = new List<ConversationSummary>();
+        var scanned = 0;
+        await foreach (var conv in Conversations.GetProjectConversationsAsync(
+            new AgentReference(_agentId, resolvedVersion), cancellationToken: cancellationToken))
+        {
+            if (++scanned > MaxConversationsScanned)
+                break;
+
+            if (conv.Metadata is null
+                || !conv.Metadata.TryGetValue(ConversationMetadata.OwnerKey, out var owner)
+                || !ConversationMetadata.KeysMatch(owner, ownerKey))
+                continue;
+
+            conversations.Add(new ConversationSummary
+            {
+                Id = conv.Id,
+                Title = conv.Metadata.TryGetValue(ConversationMetadata.TitleKey, out var title) ? title : null,
+                CreatedAt = conv.CreatedAt.ToUnixTimeSeconds()
+            });
+
+            if (conversations.Count > limit)
+                break;
+        }
+
+        return conversations;
+    }
+
+    private ProjectConversationsClient Conversations =>
+        GetProjectClient().ProjectOpenAIClient.GetProjectConversationsClient();
+
+    // ===== IConversationOwnershipStore (Foundry conversation metadata) =====
+
+    public async Task<string?> GetOwnerAsync(string conversationId, CancellationToken cancellationToken)
+    {
+        var metadata = await GetMetadataAsync(conversationId, cancellationToken);
+        return metadata is not null && metadata.TryGetValue(ConversationMetadata.OwnerKey, out var owner) ? owner : null;
+    }
+
+    public async Task AddAuthorizedFilesAsync(string conversationId, IReadOnlyCollection<AuthorizedFile> files, CancellationToken cancellationToken)
+    {
+        if (files.Count == 0)
+            return;
+
+        var current = await GetMetadataAsync(conversationId, cancellationToken)
+            ?? throw new InvalidOperationException("Conversation not found while recording authorized files.");
+
+        // Update replaces the whole metadata dictionary: merge to keep owner and title.
+        var options = new ProjectConversationUpdateOptions();
+        foreach (var (key, value) in ConversationMetadata.WithFiles(current, files))
+        {
+            options.Metadata[key] = value;
+        }
+
+        await Conversations.UpdateProjectConversationAsync(conversationId, options, cancellationToken);
+    }
+
+    public async Task<bool> IsFileAuthorizedAsync(string conversationId, string fileId, string? containerId, CancellationToken cancellationToken)
+    {
+        var metadata = await GetMetadataAsync(conversationId, cancellationToken);
+        return metadata is not null && ConversationMetadata.ContainsFile(metadata, fileId, containerId);
+    }
+
+    /// <summary>Conversation metadata, or null when Foundry reports the conversation does not exist.</summary>
+    private async Task<IReadOnlyDictionary<string, string>?> GetMetadataAsync(string conversationId, CancellationToken cancellationToken)
+    {
         try
         {
-            _logger.LogInformation("Listing conversations (limit={Limit})", limit);
-
-            try
-            {
-                // Pin to the same resolved version metadata/streaming use.
-                var resolvedAgent = await GetAgentAsync(cancellationToken);
-                var resolvedVersion = _configuredAgentVersion ?? resolvedAgent.Version;
-
-                var conversations = new List<ConversationSummary>();
-                // Fetch limit+1 to detect if more conversations exist beyond the requested page
-                var fetchLimit = limit + 1;
-                await foreach (var conv in GetProjectClient().ProjectOpenAIClient.GetProjectConversationsClient().GetProjectConversationsAsync(
-                    new AgentReference(_agentId, resolvedVersion), cancellationToken: cancellationToken))
-                {
-                    conversations.Add(new ConversationSummary
-                    {
-                        Id = conv.Id,
-                        Title = conv.Metadata?.TryGetValue("title", out var title) == true ? title : null,
-                        CreatedAt = conv.CreatedAt.ToUnixTimeSeconds()
-                    });
-
-                    if (conversations.Count >= fetchLimit)
-                        break;
-                }
-
-                if (conversations.Count > 0)
-                {
-                    _logger.LogInformation("Found {Count} conversations", conversations.Count);
-                    return conversations;
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Foundry conversation listing failed; using in-process fallback conversation store");
-            }
-
-            var fallbackConversations = _conversationStore.ListConversations();
-            return fallbackConversations.Take(limit).ToList();
+            ProjectConversation conversation = await Conversations.GetProjectConversationAsync(conversationId, cancellationToken);
+            return conversation.Metadata is null
+                ? new Dictionary<string, string>()
+                : new Dictionary<string, string>(conversation.Metadata);
         }
-        catch (Exception ex)
+        catch (ClientResultException ex) when (ex.Status == 404)
         {
-            _logger.LogError(ex, "Failed to list conversations");
-            throw;
+            return null;
         }
     }
 
@@ -939,53 +926,25 @@ public class AgentFrameworkService : IAgentFrameworkService, IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        try
+        var messages = new List<ConversationMessageInfo>();
+
+        // Filter to message items only
+        await foreach (var item in Conversations.GetProjectConversationItemsAsync(
+            conversationId, itemKind: AgentResponseItemKind.Message, cancellationToken: cancellationToken))
         {
-            _logger.LogInformation("Getting messages for conversation: {ConversationId}", conversationId);
-
-            try
+            if (item.AsResponseResultItem() is MessageResponseItem messageItem)
             {
-                var messages = new List<ConversationMessageInfo>();
-
-                // Filter to message items only
-                await foreach (var item in GetProjectClient().ProjectOpenAIClient.GetProjectConversationsClient().GetProjectConversationItemsAsync(
-                    conversationId, itemKind: AgentResponseItemKind.Message, cancellationToken: cancellationToken))
+                messages.Add(new ConversationMessageInfo
                 {
-                    var responseItem = item.AsResponseResultItem();
-                    if (responseItem is MessageResponseItem messageItem)
-                    {
-                        var content = string.Join("", messageItem.Content
-                            .Where(c => c.Text != null)
-                            .Select(c => c.Text));
-
-                        messages.Add(new ConversationMessageInfo
-                        {
-                            Role = messageItem.Role.ToString().ToLowerInvariant(),
-                            Content = content
-                        });
-                    }
-                }
-
-                if (messages.Count > 0)
-                {
-                    _logger.LogInformation("Found {Count} messages in conversation {ConversationId}", messages.Count, conversationId);
-                    messages.Reverse();
-                    return messages;
-                }
+                    Role = messageItem.Role.ToString().ToLowerInvariant(),
+                    Content = string.Join("", messageItem.Content.Where(c => c.Text != null).Select(c => c.Text))
+                });
             }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Foundry conversation message listing failed; using in-process fallback conversation store for {ConversationId}", conversationId);
-            }
+        }
 
-            var fallbackMessages = _conversationStore.GetMessages(conversationId);
-            return fallbackMessages;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to get messages for conversation: {ConversationId}", conversationId);
-            throw;
-        }
+        // Items are returned newest first; the UI expects chronological order.
+        messages.Reverse();
+        return messages;
     }
 
     /// <summary>
@@ -1182,79 +1141,6 @@ public class AgentFrameworkService : IAgentFrameworkService, IDisposable
     /// </summary>
     public (int InputTokens, int OutputTokens, int TotalTokens)? GetLastUsage() =>
         _lastUsage is null ? null : (_lastUsage.InputTokenCount, _lastUsage.OutputTokenCount, _lastUsage.TotalTokenCount);
-
-    /// <summary>
-    /// Returns a count and total byte size of files uploaded by this web app (identified by
-    /// filename prefix <see cref="WebAppUploadFilenamePrefix"/>) that are still stored in the
-    /// Foundry project. Uses <see cref="FilePurpose.Assistants"/> because that is the purpose
-    /// under which <see cref="BuildUserMessageAsync"/> stores image uploads.
-    /// </summary>
-    public async Task<UploadedFilesInfo> ListUploadedFilesAsync(CancellationToken cancellationToken = default)
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-
-        var fileClient = GetProjectClient().ProjectOpenAIClient.GetOpenAIFileClient();
-        var result = await fileClient.GetFilesAsync(FilePurpose.Assistants, cancellationToken);
-
-        int count = 0;
-        long totalBytes = 0;
-        foreach (var file in result.Value)
-        {
-            if (file.Filename != null && file.Filename.StartsWith(WebAppUploadFilenamePrefix, StringComparison.Ordinal))
-            {
-                count++;
-                totalBytes += file.SizeInBytesLong ?? file.SizeInBytes ?? 0;
-            }
-        }
-
-        _logger.LogInformation("ListUploadedFiles: {Count} files, {TotalBytes} bytes", count, totalBytes);
-        return new UploadedFilesInfo(count, totalBytes);
-    }
-
-    /// <summary>
-    /// Deletes every file in the Foundry project whose filename begins with
-    /// <see cref="WebAppUploadFilenamePrefix"/>. Intended as a user-triggered cleanup
-    /// because the GA Files API does not expose <c>expires_after</c> on upload — see README
-    /// "Known limitations". Returns counts of successful and failed deletions; failures are
-    /// logged but do not abort the loop.
-    /// </summary>
-    public async Task<UploadedFilesCleanupResult> CleanupUploadedFilesAsync(CancellationToken cancellationToken = default)
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-
-        var fileClient = GetProjectClient().ProjectOpenAIClient.GetOpenAIFileClient();
-        var result = await fileClient.GetFilesAsync(FilePurpose.Assistants, cancellationToken);
-
-        int deleted = 0;
-        int failed = 0;
-        foreach (var file in result.Value)
-        {
-            if (file.Filename == null || !file.Filename.StartsWith(WebAppUploadFilenamePrefix, StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            try
-            {
-                await fileClient.DeleteFileAsync(file.Id, cancellationToken);
-                deleted++;
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                failed++;
-                _logger.LogWarning(ex, "Failed to delete uploaded file {FileId} ({FileName})", file.Id, file.Filename);
-            }
-        }
-
-        _logger.LogInformation("CleanupUploadedFiles: deleted={Deleted} failed={Failed}", deleted, failed);
-        return new UploadedFilesCleanupResult(deleted, failed);
-    }
 
     public void Dispose()
     {

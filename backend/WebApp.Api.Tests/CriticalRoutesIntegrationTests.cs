@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using WebApp.Api.Security;
 using WebApp.Api.Tests.TestSupport;
 
 namespace WebApp.Api.Tests;
@@ -116,7 +117,6 @@ public sealed class CriticalRoutesIntegrationTests
     // ===================== Lote 2: ownership (target behavior) =====================
 
     [TestMethod]
-    [Ignore("Lote 2: ownership SHA256(tid:oid) — hoy cualquier usuario autenticado lee conversaciones ajenas")]
     public async Task OtherUser_GetsNotFound_WhenReadingMessages()
     {
         var conversationId = await StartConversationAsync(_factory.CreateUserClient(UserA));
@@ -127,7 +127,6 @@ public sealed class CriticalRoutesIntegrationTests
     }
 
     [TestMethod]
-    [Ignore("Lote 2: ownership — hoy B puede escribir (y continuar el stream) en la conversación de A")]
     public async Task OtherUser_GetsNotFound_WhenSendingOrStreaming()
     {
         var conversationId = await StartConversationAsync(_factory.CreateUserClient(UserA));
@@ -141,7 +140,6 @@ public sealed class CriticalRoutesIntegrationTests
     }
 
     [TestMethod]
-    [Ignore("Lote 2: ownership — las aprobaciones MCP existen en el backend (sin UI) y hoy no comprueban propietario")]
     public async Task OtherUser_CannotApproveMcpCall()
     {
         var conversationId = await StartConversationAsync(_factory.CreateUserClient(UserA));
@@ -159,7 +157,6 @@ public sealed class CriticalRoutesIntegrationTests
     }
 
     [TestMethod]
-    [Ignore("Lote 2: descarga ligada a una conversación propia — hoy cualquier usuario descarga cualquier archivo")]
     public async Task OtherUser_CannotDownloadFilesOfAnotherUsersConversation()
     {
         var conversationId = await StartConversationAsync(_factory.CreateUserClient(UserA));
@@ -171,7 +168,6 @@ public sealed class CriticalRoutesIntegrationTests
     }
 
     [TestMethod]
-    [Ignore("Lote 2: la descarga exigirá conversationId")]
     public async Task FileDownload_WithoutConversationId_IsRejected()
     {
         var response = await _factory.CreateUserClient(UserA).GetAsync("/api/files/file_cited");
@@ -180,7 +176,6 @@ public sealed class CriticalRoutesIntegrationTests
     }
 
     [TestMethod]
-    [Ignore("Lote 2: listado filtrado por owner — hoy se listan las conversaciones de todos")]
     public async Task List_ShowsOnlyOwnConversations_AndHidesLegacyOnes()
     {
         var conversationOfA = await StartConversationAsync(_factory.CreateUserClient(UserA));
@@ -195,27 +190,113 @@ public sealed class CriticalRoutesIntegrationTests
         CollectionAssert.DoesNotContain(ids, "conv_legacy");
     }
 
-    // ===================== Lote 3: backend security (target behavior) =====================
+    [TestMethod]
+    public async Task NewConversation_StoresHashedOwner_NeverClearIds()
+    {
+        var conversationId = await StartConversationAsync(_factory.CreateUserClient(UserA));
+        var metadata = _factory.Foundry.MetadataOf(conversationId);
+
+        Assert.AreEqual(UserIdentity.ComputeOwnerKey(TestAuthHandler.HomeTenantId, UserA), metadata[ConversationMetadata.OwnerKey]);
+        Assert.IsFalse(metadata.Values.Any(v => v.Contains(UserA, StringComparison.OrdinalIgnoreCase)), "oid must not be stored in clear");
+        Assert.IsFalse(metadata.Values.Any(v => v.Contains(TestAuthHandler.HomeTenantId, StringComparison.OrdinalIgnoreCase)), "tid must not be stored in clear");
+    }
 
     [TestMethod]
-    [Ignore("Lote 3: cleanup y listado global de uploads fuera del API público")]
+    public async Task Owner_CanDownloadFileCitedInOwnConversation()
+    {
+        var client = _factory.CreateUserClient(UserA);
+        var conversationId = await StartConversationAsync(client); // the fake cites FakeFoundry.CitedFileId
+
+        var response = await client.GetAsync($"/api/files/{FakeFoundry.CitedFileId}?conversationId={conversationId}");
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        Assert.AreEqual(1, _factory.Foundry.DownloadCalls);
+    }
+
+    [TestMethod]
+    public async Task Owner_CannotDownloadFileNotCitedInTheConversation()
+    {
+        var client = _factory.CreateUserClient(UserA);
+        var conversationId = await StartConversationAsync(client);
+
+        var response = await client.GetAsync($"/api/files/file_from_another_project?conversationId={conversationId}");
+
+        Assert.AreEqual(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.AreEqual(0, _factory.Foundry.DownloadCalls);
+    }
+
+    [TestMethod]
+    public async Task Owner_CanApproveOwnMcpCall()
+    {
+        var client = _factory.CreateUserClient(UserA);
+        var conversationId = await StartConversationAsync(client);
+
+        var (response, _) = await client.PostChatAsync(new
+        {
+            message = "Approved",
+            conversationId,
+            previousResponseId = "resp_1",
+            mcpApproval = new { approvalRequestId = "mcpr_1", approved = true }
+        });
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        Assert.AreEqual("mcpr_1", _factory.Foundry.LastApproval?.ApprovalRequestId);
+    }
+
+    [TestMethod]
+    public async Task McpApproval_WithoutConversation_IsRejected()
+    {
+        var (response, _) = await _factory.CreateUserClient(UserA).PostChatAsync(new
+        {
+            message = "Approved",
+            mcpApproval = new { approvalRequestId = "mcpr_1", approved = true }
+        });
+
+        Assert.AreEqual(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.AreEqual(0, _factory.Foundry.ConversationIds.Count);
+    }
+
+    [TestMethod]
+    public async Task OtherUser_GetsNotFound_WhenDeleting()
+    {
+        var conversationId = await StartConversationAsync(_factory.CreateUserClient(UserA));
+
+        var response = await _factory.CreateUserClient(UserB).DeleteAsync($"/api/conversations/{conversationId}");
+
+        Assert.AreEqual(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [TestMethod]
     [DataRow("POST", "/api/files/cleanup")]
     [DataRow("GET", "/api/files/uploaded")]
     public async Task AdminFileOperations_AreNotExposed(string method, string url)
     {
         var response = await _factory.CreateUserClient(UserA).SendAsync(new HttpRequestMessage(new HttpMethod(method), url));
 
-        Assert.AreEqual(HttpStatusCode.NotFound, response.StatusCode);
-        Assert.AreEqual(0, _factory.Foundry.CleanupCalls);
+        // No listing/cleanup operation exists any more. GET /api/files/uploaded now only matches the
+        // download route (fileId="uploaded") and is rejected for lacking a conversationId.
+        Assert.IsTrue(response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.BadRequest or HttpStatusCode.MethodNotAllowed,
+            $"Unexpected status {response.StatusCode}");
+        Assert.AreEqual(0, _factory.Foundry.DownloadCalls);
     }
 
     [TestMethod]
-    [Ignore("Lote 3: validación explícita de tid == tenant de CONSEIN")]
     public async Task TokenFromAnotherTenant_IsRejected()
     {
         var response = await _factory.CreateUserClient(UserA, tenantId: OtherTenant).GetAsync("/api/conversations");
         Assert.AreEqual(HttpStatusCode.Forbidden, response.StatusCode);
     }
+
+    [TestMethod]
+    public async Task UnknownApiRoute_Returns404ProblemDetails_NotTheSpa()
+    {
+        var response = await _factory.CreateUserClient(UserA).GetAsync("/api/no-existe");
+
+        Assert.AreEqual(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.AreEqual("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+    }
+
+    // ===================== Lote 3: backend security (target behavior) =====================
 
     [TestMethod]
     [Ignore("Lote 3: /api/agent sin Instructions ni metadata interna")]
@@ -256,14 +337,6 @@ public sealed class CriticalRoutesIntegrationTests
         StringAssert.Contains(csp, "img-src 'self' data: blob:");
         StringAssert.Contains(csp, "https://login.microsoftonline.com");
         Assert.IsTrue(response.Headers.Contains("Strict-Transport-Security"));
-    }
-
-    [TestMethod]
-    [Ignore("Lote 3: rutas /api desconocidas devuelven 404, no index.html")]
-    public async Task UnknownApiRoute_Returns404()
-    {
-        var response = await _factory.CreateUserClient(UserA).GetAsync("/api/no-existe");
-        Assert.AreEqual(HttpStatusCode.NotFound, response.StatusCode);
     }
 
     private static async Task<string> StartConversationAsync(HttpClient client)
