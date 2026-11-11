@@ -122,3 +122,15 @@ jobs:
           path: backend/TestResults/
           if-no-files-found: warn
           retention-days: 14
+
+  deployment-scripts:
+    name: Deployment scripts (Base64 transport of frontend App Insights)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # Fictitious values only; no Azure, no secrets. Fails on any non-zero exit code.
+      - name: Validate Base64 transport
+        run: bash deployment/tests/test-frontend-appinsights-b64.sh
