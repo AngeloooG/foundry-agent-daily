@@ -166,13 +166,10 @@ describe('attachments (Lote 4 target behavior)', () => {
     return f;
   };
 
-  it.skip('Lote 4: text/html is rejected', () => {
+  it('Lote 4: text/html is rejected', () => {
     expect(validateDocumentFile(file('page.html', 'text/html')).valid).toBe(false);
   });
 
-  it.todo('Lote 4: external Markdown images are not rendered (SafeMarkdown)');
-  it.todo('Lote 4: links open with target=_blank rel="noopener noreferrer"; javascript:/file: blocked');
-  it.todo('Lote 4: empty files are rejected');
 });
 
 describe('ChatService.downloadFile (lote 2 contract)', () => {

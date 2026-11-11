@@ -87,7 +87,8 @@ export function parseSseLine(line: string): SseEvent | null {
     
     // Validate event structure
     if (!parsed || typeof parsed !== 'object' || !parsed.type) {
-      console.warn('[sseParser] Invalid SSE event structure:', parsed);
+      // Never log the payload: it contains model output / user content.
+      if (import.meta.env.DEV) console.warn('[sseParser] Invalid SSE event structure');
       return null;
     }
 
@@ -95,8 +96,8 @@ export function parseSseLine(line: string): SseEvent | null {
     // Map to expected structure: {type: "conversationId", data: parsed}
     const { type, ...data } = parsed;
     return { type, data } as SseEvent;
-  } catch (error) {
-    console.warn('[sseParser] Malformed JSON in SSE event:', jsonString, error);
+  } catch {
+    if (import.meta.env.DEV) console.warn('[sseParser] Malformed JSON in SSE event');
     return null;
   }
 }

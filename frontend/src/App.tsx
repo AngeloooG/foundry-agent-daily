@@ -1,7 +1,7 @@
 import { AuthenticatedTemplate, UnauthenticatedTemplate, useMsalAuthentication } from "@azure/msal-react";
-import { Spinner } from '@fluentui/react-components';
+import { Button, Spinner } from '@fluentui/react-components';
 import { useAppState } from './hooks/useAppState';
-import { InteractionType } from "@azure/msal-browser";
+import { InteractionRequiredAuthError, InteractionType } from "@azure/msal-browser";
 import { ErrorBoundary } from "./components/core/ErrorBoundary";
 import { DailyShell } from "./components/daily/DailyShell";
 import { loginRequest } from "./config/authConfig";
@@ -12,7 +12,10 @@ import "./App.css";
 
 function App() {
   // This hook handles authentication automatically - redirects if not authenticated
-  useMsalAuthentication(InteractionType.Redirect, loginRequest);
+  const { error: loginError, login } = useMsalAuthentication(InteractionType.Redirect, loginRequest);
+  // InteractionRequired is part of the normal redirect flow; anything else is a real sign-in failure
+  // (previously ignored, which left the "Signing in..." screen forever).
+  const signInFailed = Boolean(loginError) && !(loginError instanceof InteractionRequiredAuthError);
   const { auth } = useAppState();
   const { getAccessToken } = useAuth();
   const [agentMetadata, setAgentMetadata] = useState<IAgentMetadata | null>(null);
@@ -90,13 +93,26 @@ function App() {
             )}
           </AuthenticatedTemplate>
           <UnauthenticatedTemplate>
-            <div className="app-container" style={{ 
-              display: 'flex', 
-              alignItems: 'center', 
-              justifyContent: 'center', 
+            <div className="app-container" style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexDirection: 'column',
+              gap: '1rem',
               height: '100vh'
             }}>
-              <p>Signing in...</p>
+              {signInFailed ? (
+                <>
+                  <p role="alert" style={{ margin: 0 }}>
+                    No se pudo iniciar sesión. / Sign-in failed.
+                  </p>
+                  <Button appearance="primary" onClick={() => login(InteractionType.Redirect, loginRequest)}>
+                    Reintentar / Try again
+                  </Button>
+                </>
+              ) : (
+                <p>Signing in...</p>
+              )}
             </div>
           </UnauthenticatedTemplate>
         </>
